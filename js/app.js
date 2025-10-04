@@ -4,6 +4,7 @@ import { RandomForestModel } from '../models/randomForest.js';
 import { EnsembleModel, EnsembleFactory } from '../models/ensemble.js';
 import { ModelUtils } from '../models/base.js';
 import { DataLoader } from '../loader/dataLoader.js';
+import { DataProcessor } from '../processor/processor.js';
 import { Visualizer } from '../visualization/charts.js';
 
 export class ExoplanetDetectorApp {
@@ -13,9 +14,11 @@ export class ExoplanetDetectorApp {
         this.activeModel = null;
         this.dataLoader = new DataLoader();
         this.visualizer = new Visualizer();
+        this.dataProcessor = new DataProcessor();
         this.pcaParams = null;
         this.trainingData = null;
         this.isTraining = false;
+        this.dataLoadedFromPCA = false; // Track if using pre-processed PCA data
         
         this.initializeModels();
         this.setupEventListeners();
@@ -100,7 +103,7 @@ export class ExoplanetDetectorApp {
         }));
     }
 
-    async loadPCAParameters() { // There is something to fo here
+    async loadPCAParameters() {
         try {
             this.pcaParams = await ModelUtils.loadPCAParams();
             if (this.pcaParams) {
@@ -128,7 +131,7 @@ export class ExoplanetDetectorApp {
             mean: [2.5, 8.0, 3.2, 1.0, 5500, 0.5],
             scale: [1.2, 5.0, 1.5, 0.8, 1000, 0.3],
             n_components: 3,
-            feature_names: ['period', 'duration', 'depth', 'stellar_radius', 'stellar_temp', 'impact_parameter'] //Thats not all there are more features
+            feature_names: ['period', 'duration', 'depth', 'stellar_radius', 'stellar_temp', 'impact_parameter']
         };
         
         console.log('Using mock PCA parameters');
@@ -175,10 +178,17 @@ export class ExoplanetDetectorApp {
         try {
             const { features, labels } = trainingData;
             
-            // Apply PCA transformation
-            const pcaFeatures = ModelUtils.applyPCA(features, this.pcaParams);
-            
-            console.log(`Training with ${features.length} samples, ${pcaFeatures.shape[1]} PCA features`);
+            // Apply PCA transformation only if not already PCA-transformed
+            let pcaFeatures;
+            if (this.dataLoadedFromPCA) {
+                // Data is already PCA-transformed
+                pcaFeatures = tf.tensor2d(features);
+                console.log(`Training with pre-processed PCA data: ${features.length} samples, ${features[0].length} components`);
+            } else {
+                // Apply PCA transformation
+                pcaFeatures = ModelUtils.applyPCA(features, this.pcaParams);
+                console.log(`Training with ${features.length} samples, ${pcaFeatures.shape[1]} PCA features`);
+            }
             
             // Train active model
             if (this.activeModel instanceof EnsembleModel) {
@@ -214,8 +224,15 @@ export class ExoplanetDetectorApp {
         }
 
         try {
-            // Apply PCA transformation
-            const pcaFeatures = ModelUtils.applyPCA([features], this.pcaParams);
+            // Apply PCA transformation only if model was trained on PCA features
+            let pcaFeatures;
+            if (this.dataLoadedFromPCA) {
+                // If training data was already PCA-transformed, features should match
+                pcaFeatures = tf.tensor2d([features]);
+            } else {
+                // Apply PCA transformation
+                pcaFeatures = ModelUtils.applyPCA([features], this.pcaParams);
+            }
             
             // Get prediction
             const probabilities = await this.activeModel.predict(pcaFeatures);
@@ -253,7 +270,12 @@ export class ExoplanetDetectorApp {
             this.updateStatus('Running batch prediction...', true);
             
             // Apply PCA transformation
-            const pcaFeatures = ModelUtils.applyPCA(featuresArray, this.pcaParams);
+            let pcaFeatures;
+            if (this.dataLoadedFromPCA) {
+                pcaFeatures = tf.tensor2d(featuresArray);
+            } else {
+                pcaFeatures = ModelUtils.applyPCA(featuresArray, this.pcaParams);
+            }
             
             // Get predictions
             const probabilities = await this.activeModel.predict(pcaFeatures);
@@ -291,12 +313,6 @@ export class ExoplanetDetectorApp {
         }
     }
 
-
-    /**😑😑😑😑😑😑😑😑😑😑😑😑😑
-     * 
-     * Add a model whose role is to get in candidates and predict if they are confirmed or not 
-     */
-
     getClassificationLabel(classIndex) {
         const labels = ['FALSE POSITIVE', 'CANDIDATE', 'CONFIRMED'];
         return labels[classIndex] || 'UNKNOWN';
@@ -320,7 +336,7 @@ export class ExoplanetDetectorApp {
             this.updatePCADisplay();
             
             // If training data exists, re-train models with new PCA settings
-            if (this.trainingData) {
+            if (this.trainingData && !this.dataLoadedFromPCA) {
                 await this.trainModels(this.trainingData);
             }
         } else {
@@ -332,13 +348,26 @@ export class ExoplanetDetectorApp {
         try {
             this.updateStatus('Processing uploaded file...', true);
             
-            const processedData = await this.dataLoader.loadFile(file);
-            this.trainingData = processedData;
+            const fileExtension = file.name.split('.').pop().toLowerCase();
+            let processedData;
+            
+            // Route to appropriate loader based on file type
+            if (fileExtension === 'npy' || fileExtension === 'json') {
+                // Pre-processed PCA data
+                processedData = await this.loadPCAData([file]);
+            } else if (fileExtension === 'csv') {
+                // Raw CSV data - needs processing
+                processedData = await this.processRawCSV(file);
+            } else {
+                throw new Error(`Unsupported file format: ${fileExtension}`);
+            }
+
             console.log('File processed:', processedData);
-            this.updateStatus(`Processed ${processedData.rowCount} records`);
+            this.updateStatus(`Processed ${processedData.features?.length || 0} records`);
             
             // Automatically start training if in researcher mode
-            if (this.currentMode === 'researcher' && processedData.features.rowCount > 0) {
+            if (this.currentMode === 'researcher' && processedData.features?.length > 0) {
+                this.trainingData = processedData;
                 await this.trainModels(processedData);
             }
             
@@ -349,6 +378,81 @@ export class ExoplanetDetectorApp {
             this.updateStatus('File processing failed');
             throw error;
         }
+    }
+
+    async loadPCAData(files) {
+        try {
+            // Load pre-processed PCA data using DataLoader
+            const results = await this.dataLoader.loadPCADataset(files);
+            
+            if (results.errors.length > 0) {
+                console.warn('Some files failed to load:', results.errors);
+            }
+            
+            // Extract training data
+            const features = results.X_train_pca?.data || [];
+            const labels = results.y_train?.data || [];
+            
+            if (results.pca_params) {
+                this.pcaParams = results.pca_params.data;
+                this.updatePCADisplay();
+            }
+            
+            this.dataLoadedFromPCA = true;
+            
+            return {
+                features: this.reshapeNPYData(features, results.X_train_pca?.shape),
+                labels: labels,
+                featureNames: Array.from({length: this.pcaParams?.n_components || 3}, (_, i) => `PC${i+1}`)
+            };
+            
+        } catch (error) {
+            console.error('PCA data loading failed:', error);
+            throw new Error('Failed to load PCA data: ' + error.message);
+        }
+    }
+
+    async processRawCSV(file) {
+        try {
+            // Load CSV using DataLoader
+            const csvData = await this.dataLoader.loadCSV(file);
+            
+            // Process using DataProcessor
+            const processedData = await this.dataProcessor.preprocessData(csvData);
+            
+            // Apply PCA transformation
+            const pcaFeatures = await this.dataProcessor.fitTransform(processedData.features);
+            
+            // Update PCA parameters from processor
+            this.pcaParams = this.dataProcessor.exportParams();
+            this.updatePCADisplay();
+            
+            this.dataLoadedFromPCA = false;
+            
+            return {
+                features: pcaFeatures,
+                labels: processedData.labels,
+                featureNames: processedData.featureNames
+            };
+            
+        } catch (error) {
+            console.error('CSV processing failed:', error);
+            throw new Error('Failed to process CSV: ' + error.message);
+        }
+    }
+
+    reshapeNPYData(flatData, shape) {
+        if (!shape || shape.length < 2) return flatData;
+        
+        const rows = shape[0];
+        const cols = shape[1];
+        const reshaped = [];
+        
+        for (let i = 0; i < rows; i++) {
+            reshaped.push(flatData.slice(i * cols, (i + 1) * cols));
+        }
+        
+        return reshaped;
     }
 
     // UI Update Methods
@@ -403,10 +507,8 @@ export class ExoplanetDetectorApp {
         });
     }
 
-    updateModelConfigDisplay(modelName, config) // TO DO
-    {
-        updateModelDisplay(modelName);
-
+    updateModelConfigDisplay(modelName, config) {
+        this.updateModelDisplay(modelName);
     }
 
     showError(message) {
@@ -451,7 +553,7 @@ export class ExoplanetDetectorApp {
         window.predictSingle = () => this.handleSinglePrediction();
         window.batchPredict = () => this.handleBatchPrediction();
         window.handleFileUpload = (event) => this.handleFileUpload(event);
-        window.updatePCAComponents = (num) => updatePCAComponents(num);
+        window.updatePCAComponents = (num) => this.updatePCAComponents(num);
         window.updateHyperparameter = (param, value, model) => 
             this.updateHyperparameters(model || 'mlp-deep', { [param]: value });
     }
@@ -474,8 +576,6 @@ export class ExoplanetDetectorApp {
 
     async handleBatchPrediction() {
         if (!this.trainingData || this.trainingData.features.length === 0) {
-            // Generate mock data for demo
-            // Dont forget to remove all the mock stuffs
             const mockFeatures = this.dataProcessor.generateMockDataset(100);
             const results = await this.batchPredict(mockFeatures);
             this.displayBatchResults(results);
@@ -490,8 +590,9 @@ export class ExoplanetDetectorApp {
         if (files.length === 0) return;
         
         try {
-            const file = files[0];
-            await this.processFile(file);
+            for (const file of files) {
+                await this.processFile(file);
+            }
         } catch (error) {
             this.showError('File upload failed: ' + error.message);
         }
