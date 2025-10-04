@@ -176,6 +176,10 @@ export class ExoplanetDetectorApp {
         this.updateStatus('Training models...', true);
 
         try {
+
+            if(trainingData == null)
+                console.error("Error trainData is null......................")
+
             const { features, labels } = trainingData;
             
             // Apply PCA transformation only if not already PCA-transformed
@@ -186,12 +190,15 @@ export class ExoplanetDetectorApp {
                 console.log(`Training with pre-processed PCA data: ${features.length} samples, ${features[0].length} components`);
             } else {
                 // Apply PCA transformation
-                if(features == null)
-                    console.error("Error Feature is null")
-                if(this.pcaParams == null)  
-                    console.error("Error PCA Params is null")
-                
+               
+                /**
+                 * 
+                 * Actually the trainingData elements a not null
+                 * but still getting error here with the tensor creation
+                 */
+
                 pcaFeatures = ModelUtils.applyPCA(features, this.pcaParams);
+                this.dataLoadedFromPCA = true
                 console.log(`Training with ${features.length} samples, ${pcaFeatures.shape[1]} PCA features`);
             }
             
@@ -400,6 +407,7 @@ export class ExoplanetDetectorApp {
             const features = results.X_train_pca?.data || [];
             const labels = results.y_train?.data || [];
             
+            console.log("PCA Params: ",results.pca_params)
             if (results.pca_params) {
                 this.pcaParams = results.pca_params.data;
                 this.updatePCADisplay();
@@ -419,10 +427,13 @@ export class ExoplanetDetectorApp {
         }
     }
 
-    async processRawCSV(file) {
+async processRawCSV(file) {
         try {
             // Load CSV using DataLoader
             const csvData = await this.dataLoader.loadCSV(file);
+            
+            console.log('CSV loaded, row count:', csvData.rowCount);
+            console.log('Sample data:', csvData.data.slice(0, 2));
             
             // Process using DataProcessor
             const processedData = await this.dataProcessor.preprocessData(csvData);
@@ -430,8 +441,17 @@ export class ExoplanetDetectorApp {
             // Apply PCA transformation
             const pcaFeatures = await this.dataProcessor.fitTransform(processedData.features);
             
-            // Update PCA parameters from processor
-            this.pcaParams = this.dataProcessor.exportParams();
+            // Update PCA parameters from processor and normalize format
+            const rawParams = this.dataProcessor.exportParams();
+            this.pcaParams = ModelUtils.normalizePCAParams(rawParams);
+            
+            console.log('PCA parameters normalized:', {
+                mean: this.pcaParams.mean?.length,
+                scale: this.pcaParams.scale?.length,
+                components: this.pcaParams.pca_components?.length,
+                n_components: this.pcaParams.n_components
+            });
+            
             this.updatePCADisplay();
             
             this.dataLoadedFromPCA = false;

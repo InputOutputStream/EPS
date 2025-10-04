@@ -90,7 +90,7 @@ export class ModelUtils {
         return tf.argMax(predictions, -1);
     }
 
-    static async loadPCAParams(path = '/data/pca_params.json') {
+    static async loadPCAParams(path = '/dataset/output/pca_params.json') {
         try {
             const response = await fetch(path);
             return await response.json();
@@ -105,29 +105,72 @@ export class ModelUtils {
             throw new Error('PCA parameters not available');
         }
 
-        const X = tf.tensor2d(data);
-        const mean = tf.tensor1d(pcaParams.mean);
-        const scale = tf.tensor1d(pcaParams.scale);
-        const components = tf.tensor2d(pcaParams.pca_components);
+        // Validate pcaParams structure
+        if (!pcaParams.mean || !Array.isArray(pcaParams.mean)) {
+            throw new Error('Invalid PCA parameters: mean is missing or not an array');
+        }
 
-          console.log('X', X)
-        console.log('mean', mean)
-          console.log('scale', scale)
-        console.log('components', components)
+        // Handle both naming conventions:
+        // - DataProcessor uses: { mean, std, components }
+        // - Pre-loaded PCA uses: { mean, scale, pca_components }
+        const scaleArray = pcaParams.scale || pcaParams.std;
+        const componentsArray = pcaParams.pca_components || pcaParams.components;
 
-        // Standardize
-        const X_scaled = X.sub(mean).div(scale);
-        
-        // Apply PCA transformation
-        const X_pca = X_scaled.matMul(components.transpose());
+        if (!scaleArray || !Array.isArray(scaleArray)) {
+            throw new Error('Invalid PCA parameters: scale/std is missing or not an array');
+        }
+        if (!componentsArray || !Array.isArray(componentsArray)) {
+            throw new Error('Invalid PCA parameters: components is missing or not an array');
+        }
 
-        // Clean up
-        X.dispose();
-        X_scaled.dispose();
-        mean.dispose();
-        scale.dispose();
-        components.dispose();
+        console.log('PCA Transform Info:', {
+            dataShape: [data.length, data[0]?.length],
+            meanLength: pcaParams.mean.length,
+            scaleLength: scaleArray.length,
+            componentsShape: [componentsArray.length, componentsArray[0]?.length]
+        });
 
-        return X_pca;
+        try {
+            const X = tf.tensor2d(data);
+            const mean = tf.tensor1d(pcaParams.mean);
+            const scale = tf.tensor1d(scaleArray);
+            const components = tf.tensor2d(componentsArray);
+
+            // Standardize: (X - mean) / scale
+            const X_scaled = X.sub(mean).div(scale);
+            
+            // Apply PCA transformation: X_scaled * components^T
+            const X_pca = X_scaled.matMul(components.transpose());
+
+            // Clean up intermediate tensors
+            X.dispose();
+            X_scaled.dispose();
+            mean.dispose();
+            scale.dispose();
+            components.dispose();
+
+            console.log('PCA transformation successful:', X_pca.shape);
+            return X_pca;
+
+        } catch (error) {
+            console.error('PCA transformation error:', error);
+            throw new Error(`PCA transformation failed: ${error.message}`);
+        }
+    }
+
+    /**
+     * Normalize PCA parameters to a consistent format
+     */
+    static normalizePCAParams(pcaParams) {
+        if (!pcaParams) return null;
+
+        return {
+            mean: pcaParams.mean,
+            scale: pcaParams.scale || pcaParams.std,
+            pca_components: pcaParams.pca_components || pcaParams.components,
+            explained_variance_ratio: pcaParams.explained_variance_ratio,
+            n_components: pcaParams.n_components,
+            feature_names: pcaParams.feature_names || pcaParams.selected_features
+        };
     }
 }
