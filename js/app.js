@@ -186,6 +186,11 @@ export class ExoplanetDetectorApp {
                 console.log(`Training with pre-processed PCA data: ${features.length} samples, ${features[0].length} components`);
             } else {
                 // Apply PCA transformation
+                if(features == null)
+                    console.error("Error Feature is null")
+                if(this.pcaParams == null)  
+                    console.error("Error PCA Params is null")
+                
                 pcaFeatures = ModelUtils.applyPCA(features, this.pcaParams);
                 console.log(`Training with ${features.length} samples, ${pcaFeatures.shape[1]} PCA features`);
             }
@@ -366,11 +371,13 @@ export class ExoplanetDetectorApp {
             this.updateStatus(`Processed ${processedData.features?.length || 0} records`);
             
             // Automatically start training if in researcher mode
-            if (this.currentMode === 'researcher' && processedData.features?.length > 0) {
+            if(processedData.features?.length > 0)   
+            {
                 this.trainingData = processedData;
-                await this.trainModels(processedData);
+                if (this.currentMode === 'researcher') {
+                    await this.trainModels(processedData);
+                }
             }
-            
             return processedData;
             
         } catch (error) {

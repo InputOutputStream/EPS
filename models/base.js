@@ -110,6 +110,11 @@ export class ModelUtils {
         const scale = tf.tensor1d(pcaParams.scale);
         const components = tf.tensor2d(pcaParams.pca_components);
 
+          console.log('X', X)
+        console.log('mean', mean)
+          console.log('scale', scale)
+        console.log('components', components)
+
         // Standardize
         const X_scaled = X.sub(mean).div(scale);
         
