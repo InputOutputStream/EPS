@@ -103,39 +103,37 @@ export class ExoplanetDetectorApp {
         }));
     }
 
-    async loadPCAParameters() {
-        try {
-            this.pcaParams = await ModelUtils.loadPCAParams();
-            if (this.pcaParams) {
-                console.log('PCA parameters loaded successfully');
-                this.updatePCADisplay();
-            } else {
-                console.warn('PCA parameters not found, using mock data');
-                this.generateMockPCAParams();
-            }
-        } catch (error) {
-            console.error('Error loading PCA parameters:', error);
-            this.generateMockPCAParams();
+async loadPCAParameters() {
+    try {
+        this.pcaParams = await ModelUtils.loadPCAParams();
+        if (this.pcaParams) {
+            console.log('PCA parameters loaded successfully');
+            this.pcaParams = ModelUtils.normalizePCAParams(this.pcaParams);
+            this.updatePCADisplay();
+        } else {
+            console.warn('PCA parameters not found, will generate mock parameters when data is loaded');
+            this.pcaParams = null; // La génération se fera dans processFile ou trainModels
         }
+    } catch (error) {
+        console.error('Error loading PCA parameters:', error);
+        this.pcaParams = null;
     }
+}
 
-    generateMockPCAParams() {
-        // Generate mock PCA parameters for testing
-        this.pcaParams = {
-            pca_components: [
-                [0.4, 0.3, 0.2, 0.1, 0.05, -0.05],
-                [-0.3, 0.4, 0.1, 0.2, 0.15, 0.1],
-                [0.1, -0.2, 0.5, 0.2, 0.1, 0.3]
-            ],
-            explained_variance_ratio: [0.45, 0.25, 0.15],
-            mean: [2.5, 8.0, 3.2, 1.0, 5500, 0.5],
-            scale: [1.2, 5.0, 1.5, 0.8, 1000, 0.3],
-            n_components: 3,
-            feature_names: ['period', 'duration', 'depth', 'stellar_radius', 'stellar_temp', 'impact_parameter']
-        };
-        
-        console.log('Using mock PCA parameters');
-    }
+   generateMockPCAParams(nFeatures, nComponents = 3) {
+    // Générer des paramètres PCA fictifs basés sur le nombre de caractéristiques
+    this.pcaParams = {
+        mean: Array(nFeatures).fill(0).map(() => Math.random() * 10), // Moyennes aléatoires
+        scale: Array(nFeatures).fill(0).map(() => Math.random() * 2 + 0.1), // Écarts-types
+        pca_components: Array(nComponents).fill(0).map(() => 
+            Array(nFeatures).fill(0).map(() => Math.random() * 0.2 - 0.1) // Matrice [nComponents, nFeatures]
+        ),
+        explained_variance_ratio: Array(nComponents).fill(0).map((_, i) => 1 / (i + 1) / (1 + 1/(i+1))), // Ratios normalisés
+        n_components: nComponents,
+        feature_names: Array(nFeatures).fill(0).map((_, i) => `feature_${i + 1}`)
+    };
+    console.log(`Generated mock PCA parameters for ${nFeatures} features and ${nComponents} components`);
+}
 
     setActiveModel(modelName) {
         if (this.models.has(modelName)) {
@@ -166,112 +164,85 @@ export class ExoplanetDetectorApp {
         console.log(`Switched to ${mode} mode`);
     }
 
-    async trainModels(trainingData, valSplit = 0.2) {
-        if (this.isTraining) {
-            console.log('Training already in progress');
-            return;
-        }
-
-        this.isTraining = true;
-        this.updateStatus('Training models...', true);
-
-        try {
-
-            if(trainingData == null)
-                console.error("Error trainData is null......................")
-
-            const { features, labels } = trainingData;
-            
-            // Apply PCA transformation only if not already PCA-transformed
-            let pcaFeatures;
-            if (this.dataLoadedFromPCA) {
-                // Data is already PCA-transformed
-                pcaFeatures = tf.tensor2d(features);
-                console.log(`Training with pre-processed PCA data: ${features.length} samples, ${features[0].length} components`);
-            } else {
-                // Apply PCA transformation
-               
-                /**
-                 * 
-                 * Actually the trainingData elements a not null
-                 * but still getting error here with the tensor creation
-                 */
-
-                pcaFeatures = ModelUtils.applyPCA(features, this.pcaParams);
-                this.dataLoadedFromPCA = true
-                console.log(`Training with ${features.length} samples, ${pcaFeatures.shape[1]} PCA features`);
-            }
-            
-            // Train active model
-            if (this.activeModel instanceof EnsembleModel) {
-                const results = await this.activeModel.fit(pcaFeatures, labels, valSplit);
-                console.log('Ensemble training results:', results);
-            } else {
-                await this.activeModel.fit(pcaFeatures, labels, valSplit);
-            }
-            
-            // Evaluate model performance
-            const metrics = await this.activeModel.evaluate(pcaFeatures, labels);
-            this.updateMetricsDisplay(metrics);
-            
-            this.updateStatus('Training completed successfully');
-            
-            // Update visualizations
-            await this.updateTrainingVisualizations(pcaFeatures, labels);
-            
-            pcaFeatures.dispose();
-            
-        } catch (error) {
-            console.error('Training failed:', error);
-            this.updateStatus('Training failed: ' + error.message);
-            this.showError('Model training failed: ' + error.message);
-        } finally {
-            this.isTraining = false;
-        }
+   async trainModels(trainingData, valSplit = 0.2) {
+    if (this.isTraining) {
+        console.log('Training already in progress');
+        return;
     }
+    this.isTraining = true;
+    this.updateStatus('Training models...', true);
 
-    async predictSingle(features) {
-        if (!this.activeModel || !this.activeModel.trained) {
-            throw new Error('No trained model available for prediction');
+    try {
+        if (!trainingData || !trainingData.features || !trainingData.labels) {
+            throw new Error('Training data is invalid or missing');
         }
 
-        try {
-            // Apply PCA transformation only if model was trained on PCA features
-            let pcaFeatures;
-            if (this.dataLoadedFromPCA) {
-                // If training data was already PCA-transformed, features should match
-                pcaFeatures = tf.tensor2d([features]);
-            } else {
-                // Apply PCA transformation
-                pcaFeatures = ModelUtils.applyPCA([features], this.pcaParams);
+        const { features, labels } = trainingData;
+
+        // Valider et nettoyer les caractéristiques
+        const cleanedFeatures = features.map(row => 
+            row.map((val, idx) => {
+                if (val == null || isNaN(val)) {
+                    return this.pcaParams?.mean?.[idx] || 0;
+                }
+                return Number(val);
+            })
+        );
+
+        if (!cleanedFeatures.every(row => Array.isArray(row) && row.every(val => typeof val === 'number'))) {
+            throw new Error('Features must be a 2D array of numbers');
+        }
+
+        let pcaFeatures;
+        const inputFeatures = cleanedFeatures[0]?.length || 0;
+        const expectedFeatures = this.pcaParams?.mean?.length || inputFeatures;
+        const pcaComponents = this.pcaParams?.n_components || Math.min(3, inputFeatures);
+
+        console.log(`Input features: ${inputFeatures}, Expected raw: ${expectedFeatures}, PCA components: ${pcaComponents}`);
+
+        if (this.dataLoadedFromPCA) {
+            if (inputFeatures !== pcaComponents) {
+                throw new Error(
+                    `PCA data dimension mismatch: input has ${inputFeatures} components, expected ${pcaComponents}`
+                );
             }
-            
-            // Get prediction
-            const probabilities = await this.activeModel.predict(pcaFeatures);
-            const classes = await this.activeModel.predictClasses(pcaFeatures);
-            
-            const probData = await probabilities.data();
-            const classData = await classes.data();
-            
-            const result = {
-                classification: this.getClassificationLabel(classData[0]),
-                confidence: Math.max(...probData),
-                probabilities: Array.from(probData),
-                features: features
-            };
-            
-            // Clean up tensors
-            pcaFeatures.dispose();
-            probabilities.dispose();
-            classes.dispose();
-            
-            return result;
-            
-        } catch (error) {
-            console.error('Prediction failed:', error);
-            throw new Error('Prediction failed: ' + error.message);
+            pcaFeatures = tf.tensor2d(cleanedFeatures);
+            console.log(`Training with pre-processed PCA data: ${cleanedFeatures.length} samples, ${inputFeatures} components`);
+        } else {
+            if (!this.pcaParams || inputFeatures !== expectedFeatures) {
+                console.warn(`Generating PCA parameters for ${inputFeatures} features`);
+                this.generateMockPCAParams(inputFeatures, Math.min(3, inputFeatures));
+            }
+            pcaFeatures = ModelUtils.applyPCA(cleanedFeatures, this.pcaParams);
+            this.dataLoadedFromPCA = true;
+            console.log(`Training with ${cleanedFeatures.length} samples, ${pcaFeatures.shape[1]} PCA features`);
         }
+
+        // Entraîner le modèle actif
+        let metrics;
+        if (this.activeModel instanceof EnsembleModel) {
+            const results = await this.activeModel.fit(pcaFeatures, labels, valSplit);
+            console.log('Ensemble training results:', results);
+            metrics = await this.activeModel.evaluate(pcaFeatures, labels);
+        } else {
+            await this.activeModel.fit(pcaFeatures, labels, valSplit);
+            metrics = await this.activeModel.evaluate(pcaFeatures, labels);
+        }
+
+        this.updateMetricsDisplay(metrics);
+        this.updateStatus('Training completed successfully');
+        await this.updateTrainingVisualizations(pcaFeatures, labels);
+
+        pcaFeatures.dispose();
+
+    } catch (error) {
+        console.error('Training failed:', error);
+        this.updateStatus('Training failed: ' + error.message);
+        this.showError('Model training failed: ' + error.message);
+    } finally {
+        this.isTraining = false;
     }
+}
 
     async batchPredict(featuresArray) {
         if (!this.activeModel || !this.activeModel.trained) {
@@ -356,43 +327,85 @@ export class ExoplanetDetectorApp {
         }   
     }
 
-    async processFile(file) {
-        try {
-            this.updateStatus('Processing uploaded file...', true);
-            
-            const fileExtension = file.name.split('.').pop().toLowerCase();
-            let processedData;
-            
-            // Route to appropriate loader based on file type
-            if (fileExtension === 'npy' || fileExtension === 'json') {
-                // Pre-processed PCA data
-                processedData = await this.loadPCAData([file]);
-            } else if (fileExtension === 'csv') {
-                // Raw CSV data - needs processing
-                processedData = await this.processRawCSV(file);
-            } else {
-                throw new Error(`Unsupported file format: ${fileExtension}`);
-            }
+   async processFile(file) {
+    try {
+        const extension = file.name.split('.').pop().toLowerCase();
+        let data;
 
-            console.log('File processed:', processedData);
-            this.updateStatus(`Processed ${processedData.features?.length || 0} records`);
-            
-            // Automatically start training if in researcher mode
-            if(processedData.features?.length > 0)   
-            {
-                this.trainingData = processedData;
-                if (this.currentMode === 'researcher') {
-                    await this.trainModels(processedData);
-                }
+        if (extension === 'csv') {
+            const rawData = await this.dataLoader.loadCSV(file);
+            if (!rawData.data || rawData.data.length === 0) {
+                throw new Error('No valid data rows loaded from CSV');
             }
-            return processedData;
-            
-        } catch (error) {
-            console.error('File processing failed:', error);
-            this.updateStatus('File processing failed');
-            throw error;
+            data = await this.dataProcessor.preprocessData(rawData);
+            if (!data.features || !Array.isArray(data.features) || data.features.length === 0 || !data.features[0]) {
+                throw new Error('Invalid preprocessed data: features array is missing or empty');
+            }
+            this.dataLoadedFromPCA = false; // Données brutes
+            console.log(`Loaded CSV with ${data.features[0].length} features`);
+        } else if (extension === 'npy' || extension === 'json') {
+            const pcaData = await this.dataLoader.loadPCAData([file]);
+            if (pcaData.pca_params) {
+                this.pcaParams = pcaData.pca_params.data;
+                console.log('Loaded PCA parameters');
+                return pcaData.pca_params; // Return early for PCA params
+            }
+            data = {
+                features: pcaData.X_train_pca?.features || pcaData.X_train_pca?.data,
+                labels: pcaData.y_train?.labels || [],
+                featureNames: pcaData.X_train_pca?.featureNames || [],
+                format: pcaData.X_train_pca?.format || extension,
+                filename: file.name,
+                size: file.size,
+                rowCount: pcaData.X_train_pca?.rowCount || pcaData.X_train_pca?.data?.length
+            };
+            if (!data.features || !Array.isArray(data.features) || data.features.length === 0 || !data.features[0]) {
+                throw new Error('Invalid PCA data: features array is missing or empty');
+            }
+            this.dataLoadedFromPCA = true; // Données transformées par PCA
+            console.log(`Loaded PCA data with ${data.features[0].length} components`);
+        } else {
+            throw new Error('Unsupported file format');
         }
+
+        // Vérifier la compatibilité des dimensions
+        const inputFeatures = data.features[0]?.length || 0;
+        if (inputFeatures === 0) {
+            throw new Error('No features detected in the loaded data');
+        }
+
+        // Charger ou générer les paramètres PCA
+        if (!this.pcaParams) {
+            await this.loadPCAParameters();
+        }
+
+        const expectedFeatures = this.pcaParams?.mean?.length || inputFeatures;
+        const pcaComponents = this.pcaParams?.n_components || Math.min(3, inputFeatures);
+
+        if (this.dataLoadedFromPCA && inputFeatures !== pcaComponents) {
+            throw new Error(
+                `PCA data dimension mismatch: input has ${inputFeatures} components, expected ${pcaComponents}`
+            );
+        } else if (!this.dataLoadedFromPCA && inputFeatures !== expectedFeatures) {
+            console.warn(`Raw data dimension mismatch: input has ${inputFeatures} features, expected ${expectedFeatures}`);
+            console.log(`Generating PCA parameters for ${inputFeatures} features`);
+            this.generateMockPCAParams(inputFeatures, Math.min(3, inputFeatures));
+            this.pcaParams.feature_names = data.featureNames || Array(inputFeatures).fill(0).map((_, i) => `feature_${i + 1}`);
+        }
+
+        this.trainingData = {
+            features: data.features,
+            labels: data.labels || [],
+            featureNames: data.featureNames || []
+        };
+        this.updateStatus('Data loaded successfully');
+        return this.trainingData;
+    } catch (error) {
+        console.error('Error processing file:', error);
+        this.showError('Failed to process file: ' + error.message);
+        throw error;
     }
+}
 
     async loadPCAData(files) {
         try {
