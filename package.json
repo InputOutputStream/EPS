@@ -1,0 +1,33 @@
+{
+  "name": "exoplanet-hunter",
+  "version": "1.0.0",
+  "description": "AI/ML system for exoplanet detection using PCA and ensemble models",
+  "type": "module",
+  "main": "src/index.js",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "train-pca": "python scripts/processor.py"
+  },
+  "dependencies": {
+    "@tensorflow/tfjs": "^4.15.0",
+    "@tensorflow/tfjs-node": "^4.15.0",
+    "d3": "^7.8.5",
+    "papaparse": "^5.4.1",
+    "plotly.js-dist": "^2.26.0"
+  },
+  "devDependencies": {
+    "vite": "^7.1.9"
+  },
+  "keywords": [
+    "exoplanet",
+    "machine-learning",
+    "pca",
+    "tensorflow",
+    "nasa",
+    "space-apps"
+  ],
+  "author": "",
+  "license": ""
+}

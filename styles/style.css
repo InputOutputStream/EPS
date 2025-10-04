@@ -1,0 +1,319 @@
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        
+        body {
+            font-family: 'Arial', sans-serif;
+            background: linear-gradient(135deg, #0c0c0c 0%, #1a1a2e 50%, #16213e 100%);
+            color: #ffffff;
+            min-height: 100vh;
+        }
+        
+        .container { max-width: 1400px; margin: 0 auto; padding: 20px; }
+        
+        .header {
+            text-align: center;
+            margin-bottom: 30px;
+            background: rgba(255,255,255,0.05);
+            backdrop-filter: blur(10px);
+            padding: 20px;
+            border-radius: 15px;
+            border: 1px solid rgba(255,255,255,0.1);
+        }
+        
+        .header h1 {
+            font-size: 2.5em;
+            background: linear-gradient(45deg, #00d4ff, #ff0080);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            margin-bottom: 10px;
+        }
+        
+        .mode-selector, .model-selector {
+            display: flex;
+            justify-content: center;
+            gap: 15px;
+            margin: 20px 0;
+            flex-wrap: wrap;
+        }
+        
+        .mode-btn, .model-btn {
+            padding: 10px 20px;
+            background: rgba(0,212,255,0.2);
+            border: 2px solid #00d4ff;
+            color: #00d4ff;
+            cursor: pointer;
+            border-radius: 20px;
+            transition: all 0.3s ease;
+            font-size: 0.9em;
+        }
+        
+        .mode-btn.active, .mode-btn:hover, .model-btn.active, .model-btn:hover {
+            background: #00d4ff;
+            color: #000;
+            transform: translateY(-2px);
+        }
+        
+        .dashboard {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+            gap: 20px;
+            margin-bottom: 20px;
+        }
+        
+        .panel {
+            background: rgba(255,255,255,0.05);
+            backdrop-filter: blur(10px);
+            border-radius: 15px;
+            padding: 20px;
+            border: 1px solid rgba(255,255,255,0.1);
+        }
+        
+        .panel h3 {
+            color: #00d4ff;
+            margin-bottom: 15px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        .upload-area {
+            border: 2px dashed #00d4ff;
+            border-radius: 10px;
+            padding: 40px;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            margin-bottom: 20px;
+        }
+        
+        .upload-area:hover {
+            border-color: #ff0080;
+            background: rgba(255,0,128,0.1);
+        }
+        
+        .upload-area.dragover {
+            border-color: #00ff00;
+            background: rgba(0,255,0,0.1);
+        }
+        
+        .controls {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+        }
+        
+        .control-group {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+        
+        .control-group label {
+            font-size: 0.9em;
+            color: #00d4ff;
+        }
+        
+        .slider {
+            -webkit-appearance: none;
+            width: 100%;
+            height: 8px;
+            border-radius: 5px;
+            background: rgba(255,255,255,0.2);
+            outline: none;
+        }
+        
+        .slider::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            background: #00d4ff;
+            cursor: pointer;
+        }
+        
+        .btn {
+            padding: 12px 24px;
+            background: linear-gradient(45deg, #00d4ff, #ff0080);
+            border: none;
+            color: white;
+            cursor: pointer;
+            border-radius: 25px;
+            font-weight: bold;
+            transition: all 0.3s ease;
+            text-transform: uppercase;
+            margin: 5px;
+        }
+        
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 20px rgba(0,212,255,0.3);
+        }
+        
+        .btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            transform: none;
+        }
+        
+        .prediction-result {
+            background: rgba(0,255,0,0.1);
+            border: 1px solid #00ff00;
+            border-radius: 10px;
+            padding: 20px;
+            margin: 20px 0;
+            text-align: center;
+        }
+        
+        .prediction-result.false-positive {
+            background: rgba(255,0,0,0.1);
+            border-color: #ff0000;
+        }
+        
+        .prediction-result.candidate {
+            background: rgba(255,165,0,0.1);
+            border-color: #ffa500;
+        }
+        
+        .metrics {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+            gap: 15px;
+            margin-top: 20px;
+        }
+        
+        .metric {
+            text-align: center;
+            padding: 15px;
+            background: rgba(255,255,255,0.05);
+            border-radius: 10px;
+        }
+        
+        .metric-value {
+            font-size: 2em;
+            font-weight: bold;
+            color: #00d4ff;
+        }
+        
+        .metric-label {
+            font-size: 0.8em;
+            opacity: 0.8;
+        }
+        
+        .visualization {
+            height: 400px;
+            background: rgba(0,0,0,0.3);
+            border-radius: 10px;
+            margin: 20px 0;
+        }
+        
+        .feature-input {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin: 20px 0;
+        }
+        
+        .input-field {
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+        }
+        
+        .input-field input {
+            padding: 10px;
+            background: rgba(255,255,255,0.1);
+            border: 1px solid rgba(255,255,255,0.3);
+            border-radius: 5px;
+            color: white;
+        }
+        
+        .input-field input:focus {
+            outline: none;
+            border-color: #00d4ff;
+        }
+        
+        .novice-mode .advanced { display: none; }
+        
+        .tutorial {
+            background: rgba(255,165,0,0.1);
+            border: 1px solid #ffa500;
+            border-radius: 10px;
+            padding: 15px;
+            margin: 20px 0;
+        }
+        
+        .status {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            padding: 10px 20px;
+            background: rgba(0,212,255,0.2);
+            border: 1px solid #00d4ff;
+            border-radius: 20px;
+            backdrop-filter: blur(10px);
+            z-index: 1000;
+        }
+        
+        .error-message {
+            background: rgba(255,0,0,0.1);
+            border: 1px solid #ff0000;
+            border-radius: 10px;
+            padding: 20px;
+            margin: 20px 0;
+            color: #ff6b6b;
+        }
+        
+        .init-error {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            text-align: center;
+        }
+        
+        .error-panel {
+            background: rgba(255,255,255,0.05);
+            padding: 40px;
+            border-radius: 15px;
+            border: 1px solid #ff0000;
+            max-width: 600px;
+        }
+        
+        .retry-btn {
+            background: #ff0080;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 5px;
+            cursor: pointer;
+            margin-top: 20px;
+        }
+        
+        @keyframes pulse {
+            0% { opacity: 0.5; }
+            50% { opacity: 1; }
+            100% { opacity: 0.5; }
+        }
+        
+        .processing {
+            animation: pulse 2s infinite;
+        }
+        
+        @media (max-width: 768px) {
+            .dashboard {
+                grid-template-columns: 1fr;
+            }
+            
+            .mode-selector, .model-selector {
+                flex-direction: column;
+                align-items: center;
+            }
+            
+            .feature-input {
+                grid-template-columns: 1fr;
+            }
+            
+            .controls {
+                grid-template-columns: 1fr;
+            }
+        }

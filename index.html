@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ExoPlanet Hunter - NASA Space Apps Challenge</title>
+    <link rel="stylesheet" href="styles/style.css">
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🚀 ExoPlanet AI Detector:EDA</h1>
+            <p>Advanced Machine Learning with PCA for Exoplanet Discovery</p>
+            <div class="mode-selector">
+                <button class="mode-btn active" data-mode="novice" onclick="switchMode('novice')">🎓 Novice Mode</button>
+                <button class="mode-btn" data-mode="researcher" onclick="switchMode('researcher')">🔬 Researcher Mode</button>
+            </div>
+            <div class="model-selector advanced">
+                <button class="model-btn active" data-model="ensemble" onclick="setActiveModel('ensemble')">🎯 Ensemble</button>
+                <button class="model-btn" data-model="mlp-deep" onclick="setActiveModel('mlp-deep')">🧠 Deep MLP</button>
+                <button class="model-btn" data-model="mlp-shallow" onclick="setActiveModel('mlp-shallow')">⚡ Light MLP</button>
+                <button class="model-btn" data-model="xgboost" onclick="setActiveModel('xgboost')">🌲 XGBoost</button>
+                <button class="model-btn" data-model="randomforest" onclick="setActiveModel('randomforest')">🌳 Random Forest</button>
+            </div>
+        </div>
+        
+        <div class="status" id="status">Initializing...</div>
+        
+        <div class="dashboard">
+            <div class="panel">
+                <h3>📊 Model Performance</h3>
+                <div class="metrics">
+                    <div class="metric">
+                        <div class="metric-value" id="accuracy">--</div>
+                        <div class="metric-label">Accuracy</div>
+                    </div>
+                    <div class="metric">
+                        <div class="metric-value" id="precision">--</div>
+                        <div class="metric-label">Precision</div>
+                    </div>
+                    <div class="metric">
+                        <div class="metric-value" id="recall">--</div>
+                        <div class="metric-label">Recall</div>
+                    </div>
+                    <div class="metric">
+                        <div class="metric-value" id="f1score">--</div>
+                        <div class="metric-label">F1-Score</div>
+                    </div>
+                </div>
+                <div class="visualization" id="roc-curve"></div>
+            </div>
+            
+            <div class="panel">
+                <h3>🧮 Principal Component Analysis</h3>
+                <div class="tutorial" id="pca-tutorial">
+                    <strong>💡 PCA Analysis:</strong> Principal components capture the most important variance in exoplanet data. The first few components explain most of the data's structure.
+                </div>
+                
+                <div class="controls">
+                    <div class="control-group">
+                        <label for="pca-components">PCA Components</label>
+                        <input type="range" class="slider" id="pca-components" min="2" max="6" value="3" onchange="updatePCAComponents(this.value)">
+                        <span id="pca-components-value">3</span>
+                    </div>
+                    <div class="control-group">
+                        <label>Variance Explained</label>
+                        <div id="variance-explained">Loading...</div>
+                    </div>
+                </div>
+                
+                <div class="visualization" id="pca-biplot"></div>
+                <div class="visualization" id="pca-variance"></div>
+            </div>
+        </div>
+
+        <div class="panel advanced">
+            <h3>⚙️ Hyperparameters</h3>
+            <div class="controls">
+                <div class="control-group">
+                    <label for="n-estimators">Ensemble Trees</label>
+                    <input type="range" class="slider" id="n-estimators" min="50" max="200" value="100" onchange="updateHyperparameter('n_estimators', this.value)">
+                    <span id="n-estimators-value">100</span>
+                </div>
+                <div class="control-group">
+                    <label for="learning-rate">Learning Rate</label>
+                    <input type="range" class="slider" id="learning-rate" min="0.001" max="0.1" step="0.001" value="0.01" onchange="updateHyperparameter('learning_rate', this.value)">
+                    <span id="learning-rate-value">0.01</span>
+                </div>
+                <div class="control-group">
+                    <label for="hidden-layers">Hidden Units</label>
+                    <input type="range" class="slider" id="hidden-layers" min="16" max="128" value="64" onchange="updateHyperparameter('hidden_layers', this.value)">
+                    <span id="hidden-layers-value">64</span>
+                </div>
+                <div class="control-group">
+                    <label for="dropout">Dropout Rate</label>
+                    <input type="range" class="slider" id="dropout" min="0" max="0.5" step="0.1" value="0.2" onchange="updateHyperparameter('dropout', this.value)">
+                    <span id="dropout-value">0.2</span>
+                </div>
+            </div>
+            <button class="btn" id="retrain-btn" onclick="trainModels()">🔄 Train Models</button>
+        </div>
+        
+        <div class="panel">
+            <h3>📁 Data Input</h3>
+            <div class="tutorial" id="tutorial">
+                <strong>💡 Getting Started:</strong> Upload NASA exoplanet CSV files or enter parameters manually. The system uses PCA-transformed features for improved classification accuracy.
+            </div>
+            
+            <div class="upload-area" id="upload-area" onclick="document.getElementById('file-input').click()">
+                <div>📤 Drop CSV files here or click to upload</div>
+                <small>Supports Kepler, K2, TESS data formats</small>
+                <input type="file" id="file-input" accept=".csv,.json" multiple style="display: none;" onchange="handleFileUpload(event)">
+            </div>
+            
+            <div class="feature-input">
+                <div class="input-field">
+                    <label>Orbital Period (days)</label>
+                    <input type="number" id="period" step="0.001" placeholder="e.g., 365.25">
+                </div>
+                <div class="input-field">
+                    <label>Transit Duration (hours)</label>
+                    <input type="number" id="duration" step="0.01" placeholder="e.g., 6.5">
+                </div>
+                <div class="input-field">
+                    <label>Transit Depth (ppm)</label>
+                    <input type="number" id="depth" step="1" placeholder="e.g., 1000">
+                </div>
+                <div class="input-field">
+                    <label>Stellar Radius (Solar)</label>
+                    <input type="number" id="stellar_radius" step="0.01" placeholder="e.g., 1.0">
+                </div>
+                <div class="input-field advanced">
+                    <label>Stellar Temperature (K)</label>
+                    <input type="number" id="stellar_temp" step="10" placeholder="e.g., 5778">
+                </div>
+                <div class="input-field advanced">
+                    <label>Impact Parameter</label>
+                    <input type="number" id="impact" step="0.01" min="0" max="1" placeholder="e.g., 0.5">
+                </div>
+            </div>
+            
+            <div class="btn-group">
+                <button class="btn" id="predict-single" onclick="predictSingle()">🔍 Analyze Object</button>
+                <button class="btn" id="batch-predict" onclick="batchPredict()">⚡ Batch Analysis</button>
+                <button class="btn advanced" id="cross-validate" onclick="crossValidate()">📊 Cross Validate</button>
+            </div>
+        </div>
+        
+        <div id="results"></div>
+        
+        <div class="panel advanced">
+            <h3>📈 Advanced Visualizations</h3>
+            <div class="visualization" id="feature-importance"></div>
+            <div class="visualization" id="model-comparison"></div>
+            <div class="visualization" id="confusion-matrix"></div>
+            <div class="visualization" id="learning-curve"></div>
+        </div>
+        
+        <div class="panel">
+            <h3>🌟 Light Curve Analysis</h3>
+            <div class="visualization" id="light-curve"></div>
+            <div class="visualization" id="confidence-distribution"></div>
+        </div>
+    </div>
+
+    <!-- Load dependencies first -->
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@latest/dist/tf.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/plotly.js-dist@2.26.0/plotly.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.8.5/d3.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+
+    <!-- Load application modules -->
+    <script type="module" src="js/index.js"></script>
+</body>
+</html>
