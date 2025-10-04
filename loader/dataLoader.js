@@ -6,19 +6,31 @@ export class DataLoader {
     }
 
     async loadFile(file) {
-        const fileExtension = file.name.split('.').pop().toLowerCase();
-        
-        if (!this.supportedFormats.includes(fileExtension)) {
-            throw new Error(`Unsupported file format: ${fileExtension}. Supported: ${this.supportedFormats.join(', ')}`);
-        }
-        
-        switch(fileExtension) {
-            case 'csv': return this.loadCSV(file);
-            case 'json': return this.loadJSON(file);
-            case 'npy': return this.loadNPY(file);
-            default: throw new Error(`Unsupported format: ${fileExtension}`);
-        }
+    const fileExtension = file.name.split('.').pop().toLowerCase();
+    
+    if (!this.supportedFormats.includes(fileExtension)) {
+        throw new Error(`Unsupported file format: ${fileExtension}. Supported: ${this.supportedFormats.join(', ')}`);
     }
+    
+    const result = await (async () => {
+        switch (fileExtension) {
+            case 'csv':
+                return this.loadCSV(file);
+            case 'json':
+                return this.loadJSON(file);
+            case 'npy':
+                return this.loadNPY(file);
+            default:
+                throw new Error(`Unsupported format: ${fileExtension}`);
+        }
+    })();
+
+    // Standardize output format
+    return {
+        ...result,
+        isPCAData: fileExtension === 'npy' || (fileExtension === 'json' && !result.isPCAParams)
+    };
+}
 
     async loadNPY(file) {
         return new Promise((resolve, reject) => {
@@ -137,34 +149,57 @@ export class DataLoader {
         return 'unknown';
     }
 
-    async loadCSV(file) {
-        return new Promise((resolve, reject) => {
-            Papa.parse(file, {
-                complete: (results) => {
+async loadCSV(file) {
+    return new Promise((resolve, reject) => {
+        Papa.parse(file, {
+            complete: (results) => {
+                try {
                     if (results.errors.length > 0) {
                         console.warn('CSV parsing warnings:', results.errors);
                     }
+
+                    const { data, meta } = results;
+                    if (!data || data.length === 0) {
+                        throw new Error('No data rows found in CSV');
+                    }
+
+                    // Get header
+                    const header = meta.fields || Object.keys(data[0] || {});
+                    if (header.length < 2) {
+                        throw new Error('CSV must have at least one feature and one label column');
+                    }
+
+                    // Filter out empty rows
+                    const filteredData = data.filter(row => row && Object.keys(row).length > 0);
+
+                    if (filteredData.length === 0) {
+                        throw new Error('No valid rows in CSV after filtering');
+                    }
+
                     resolve({
-                        data: results.data,
-                        meta: results.meta,
+                        data: filteredData,
                         format: 'csv',
                         filename: file.name,
                         size: file.size,
-                        rowCount: results.data.length
+                        rowCount: filteredData.length,
+                        header // Include header for downstream processing
                     });
-                },
-                error: (error) => {
+                } catch (error) {
                     reject(new Error(`CSV parsing failed: ${error.message}`));
-                },
-                header: true,
-                skipEmptyLines: true,
-                dynamicTyping: true,
-                transformHeader: (header) => header.trim()
-            });
+                }
+            },
+            error: (error) => {
+                reject(new Error(`CSV parsing failed: ${error.message}`));
+            },
+            header: true,
+            skipEmptyLines: true,
+            dynamicTyping: true,
+            transformHeader: (header) => header.trim(),
+            comments: '#' // Handle comment lines
         });
-    }
-
-    async loadJSON(file) {
+    });
+}
+async loadJSON(file) {
         return new Promise((resolve, reject) => {
             const reader = new FileReader();
             
@@ -242,45 +277,50 @@ export class DataLoader {
     }
 
     getDataSummary(loadedData) {
-        if (!loadedData) return null;
-        
-        if (loadedData.format === 'npy') {
-            return {
-                filename: loadedData.filename,
-                format: 'NumPy Array',
-                fileSize: `${(loadedData.size / 1024).toFixed(2)} KB`,
-                shape: loadedData.shape.join(' × '),
-                dtype: loadedData.dtype,
-                totalElements: loadedData.shape.reduce((a, b) => a * b, 1),
-                type: loadedData.type
-            };
-        }
-        
-        if (loadedData.format === 'json' && loadedData.isPCAParams) {
-            return {
-                filename: loadedData.filename,
-                format: 'PCA Parameters',
-                fileSize: `${(loadedData.size / 1024).toFixed(2)} KB`,
-                components: loadedData.data.n_components,
-                varianceExplained: loadedData.data.explained_variance_ratio,
-                totalVariance: loadedData.data.explained_variance_ratio?.reduce((a, b) => a + b, 0).toFixed(4)
-            };
-        }
-        
-        if (loadedData.format === 'csv') {
-            const { data, meta } = loadedData;
-            return {
-                filename: loadedData.filename,
-                format: 'CSV',
-                fileSize: `${(loadedData.size / 1024).toFixed(2)} KB`,
-                rowCount: data.length,
-                columnCount: meta.fields?.length || 0,
-                columns: meta.fields || Object.keys(data[0] || {})
-            };
-        }
-        
-        return null;
+    if (!loadedData) return null;
+    
+    if (loadedData.format === 'npy') {
+        return {
+            filename: loadedData.filename,
+            format: 'NumPy Array',
+            fileSize: `${(loadedData.size / 1024).toFixed(2)} KB`,
+            shape: loadedData.shape.join(' × '),
+            dtype: loadedData.dtype,
+            totalElements: loadedData.shape.reduce((a, b) => a * b, 1),
+            type: loadedData.type
+        };
     }
+    
+    if (loadedData.format === 'json' && loadedData.isPCAParams) {
+        return {
+            filename: loadedData.filename,
+            format: 'PCA Parameters',
+            fileSize: `${(loadedData.size / 1024).toFixed(2)} KB`,
+            components: loadedData.data.n_components,
+            varianceExplained: loadedData.data.explained_variance_ratio,
+            totalVariance: loadedData.data.explained_variance_ratio?.reduce((a, b) => a + b, 0).toFixed(4)
+        };
+    }
+    
+    if (loadedData.format === 'csv') {
+        return {
+            filename: loadedData.filename,
+            format: 'CSV',
+            fileSize: `${(loadedData.size / 1024).toFixed(2)} KB`,
+            rowCount: loadedData.rowCount,
+            columnCount: loadedData.featureNames?.length || 0,
+            columns: loadedData.featureNames || [],
+            labelColumn: loadedData.featureNames ? 
+                (loadedData.featureNames[loadedData.featureNames.length] || 'Unknown') : 'Unknown'
+        };
+    }
+    
+    return {
+        filename: loadedData.filename,
+        format: loadedData.format.toUpperCase(),
+        fileSize: `${(loadedData.size / 1024).toFixed(2)} KB`
+    };
+}
 
     exportToJSON(data, filename = 'export.json') {
         const dataStr = JSON.stringify(data, null, 2);
