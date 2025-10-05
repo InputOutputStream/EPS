@@ -107,26 +107,43 @@ export class DataLoader {
         };
     }
 
-    exportToJSON(data, filename = 'export.json') {
-        const dataStr = JSON.stringify(data, null, 2);
-        const blob = new Blob([dataStr], { type: 'application/json' });
+    exportToJSON(loadedData, filename = 'export.json') {
+        if (!loadedData || !loadedData.data) {
+            throw new Error('No data to export');
+        }
         
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = filename;
+        const exportData = {
+            metadata: {
+                format: loadedData.format,
+                filename: loadedData.filename,
+                size: loadedData.size,
+                rowCount: loadedData.rowCount,
+                exportDate: new Date().toISOString()
+            },
+            data: loadedData.data,
+            features: loadedData.meta?.fields || []
+        };
         
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        
-        URL.revokeObjectURL(url);
+        const dataStr = JSON.stringify(exportData, null, 2);
+        this.downloadFile(dataStr, filename, 'application/json');
     }
 
-    exportToCSV(data, filename = 'export.csv') {
-        const csv = Papa.unparse(data);
-        const blob = new Blob([csv], { type: 'text/csv' });
+    exportToCSV(loadedData, filename = 'export.csv') {
+        if (!loadedData || !loadedData.data) {
+            throw new Error('No data to export');
+        }
         
+        const csv = Papa.unparse(loadedData.data, {
+            header: true,
+            skipEmptyLines: true
+        });
+        
+        this.downloadFile(csv, filename, 'text/csv');
+    }
+
+    // Méthode utilitaire pour le téléchargement
+    downloadFile(content, filename, mimeType) {
+        const blob = new Blob([content], { type: mimeType });
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;

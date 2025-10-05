@@ -49,6 +49,41 @@ export class DataProcessor {
         };
     }
 
+    // Méthode utilitaire pour le téléchargement
+    downloadFile(content, filename, mimeType) {
+        const blob = new Blob([content], { type: mimeType });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        
+        URL.revokeObjectURL(url);
+    }
+
+    // Méthode pour sauvegarder les données prétraitées
+    async saveProcessedData(data, filename = 'processed_exoplanet_data.json') {
+        const exportData = {
+            metadata: {
+                originalCount: data.originalCount,
+                validCount: data.validCount,
+                featureNames: data.featureNames,
+                processingDate: new Date().toISOString(),
+                featuresUsed: this.requiredFeatures
+            },
+            features: data.features,
+            labels: data.labels,
+            featureNames: data.featureNames
+        };
+        
+        const dataStr = JSON.stringify(exportData, null, 2);
+        this.downloadFile(dataStr, filename, 'application/json');
+        console.log(`Processed data saved as ${filename}`);
+    }
+
     async loadFile(file) {
         return new Promise((resolve, reject) => {
             const fileExtension = file.name.split('.').pop().toLowerCase();
@@ -328,25 +363,6 @@ export class DataProcessor {
         }
         
         return labels;
-    }
-
-    async saveProcessedData(data, filename = 'processed_exoplanet_data.json') {
-        const dataStr = JSON.stringify(data, null, 2);
-        const blob = new Blob([dataStr], { type: 'application/json' });
-        
-        // Create download link
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = filename;
-        
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        
-        URL.revokeObjectURL(url);
-        
-        console.log(`Processed data saved as ${filename}`);
     }
 
     validateDataset(data) {

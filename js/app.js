@@ -4,6 +4,7 @@ import { RandomForestModel } from '../models/randomForest.js';
 import { EnsembleModel, EnsembleFactory } from '../models/ensemble.js';
 import { ModelUtils } from '../models/base.js';
 import { DataLoader } from '../loader/dataLoader.js';
+import { DataProcessor } from '../loader/loader.js';
 import { Visualizer } from '../visualization/charts.js';
 
 export class ExoplanetDetectorApp {
@@ -12,9 +13,12 @@ export class ExoplanetDetectorApp {
         this.models = new Map();
         this.activeModel = null;
         this.dataLoader = new DataLoader();
+        this.dataProcessor = new DataProcessor();
         this.visualizer = new Visualizer();
         this.pcaParams = null;
         this.trainingData = null;
+        this.preprocessedData = null;
+        this.lastPredictions = null;
         this.isTraining = false;
         
         this.initializeModels();
@@ -100,7 +104,128 @@ export class ExoplanetDetectorApp {
         }));
     }
 
-    async loadPCAParameters() { // There is something to fo here
+    exportProcessedData(format = 'json') {
+        if (!this.trainingData) {
+            this.showError('No processed data available for export');
+            return;
+        }
+        
+        const filename = `exoplanet_processed_${new Date().toISOString().split('T')[0]}.${format}`;
+        
+        try {
+            if (format === 'json') {
+                this.dataLoader.exportToJSON(this.trainingData, filename);
+            } else if (format === 'csv') {
+                this.dataLoader.exportToCSV(this.trainingData, filename);
+            }
+            
+            this.updateStatus(`Data exported successfully as ${filename}`);
+        } catch (error) {
+            console.error('Export failed:', error);
+            this.showError('Export failed: ' + error.message);
+        }
+    }
+
+    exportPreprocessedData(format = 'json') {
+        if (!this.preprocessedData) {
+            this.showError('No preprocessed data available for export');
+            return;
+        }
+        
+        const filename = `exoplanet_preprocessed_${new Date().toISOString().split('T')[0]}.${format}`;
+        
+        try {
+            // Format data for export
+            const exportData = {
+                data: this.formatPreprocessedForExport(this.preprocessedData),
+                meta: {
+                    fields: this.preprocessedData.featureNames || this.dataProcessor.requiredFeatures
+                },
+                format: 'json',
+                filename: filename,
+                size: JSON.stringify(this.preprocessedData).length,
+                rowCount: this.preprocessedData.features.length
+            };
+            
+            if (format === 'json') {
+                this.dataLoader.exportToJSON(exportData, filename);
+            } else if (format === 'csv') {
+                const csvData = this.formatPreprocessedForCSV(this.preprocessedData);
+                this.dataLoader.exportToCSV({ data: csvData }, filename);
+            }
+            
+            this.updateStatus(`Preprocessed data exported successfully as ${filename}`);
+        } catch (error) {
+            console.error('Export failed:', error);
+            this.showError('Export failed: ' + error.message);
+        }
+    }
+
+    formatPreprocessedForExport(preprocessedData) {
+        return preprocessedData.features.map((featureVector, index) => {
+            const record = {};
+            preprocessedData.featureNames.forEach((name, i) => {
+                record[name] = featureVector[i];
+            });
+            if (preprocessedData.labels && preprocessedData.labels[index] !== null) {
+                record['classification'] = this.getClassificationLabel(preprocessedData.labels[index]);
+            }
+            return record;
+        });
+    }
+
+    formatPreprocessedForCSV(preprocessedData) {
+        return this.formatPreprocessedForExport(preprocessedData);
+    }
+
+    exportModelPredictions(predictions, format = 'json') {
+        if (!predictions || predictions.length === 0) {
+            this.showError('No predictions to export');
+            return;
+        }
+        
+        const exportData = {
+            metadata: {
+                model: this.activeModel?.name || 'unknown',
+                exportDate: new Date().toISOString(),
+                sampleCount: predictions.length
+            },
+            predictions: predictions.map((pred, index) => ({
+                id: index + 1,
+                features: pred.features,
+                classification: pred.result.classification,
+                confidence: pred.result.confidence,
+                probabilities: pred.result.probabilities
+            }))
+        };
+        
+        const filename = `model_predictions_${new Date().toISOString().split('T')[0]}.${format}`;
+        
+        try {
+            if (format === 'json') {
+                this.dataLoader.exportToJSON(exportData, filename);
+            } else if (format === 'csv') {
+                // Convertir pour CSV
+                const csvData = exportData.predictions.map(pred => ({
+                    ...pred.features,
+                    classification: pred.classification,
+                    confidence: pred.confidence,
+                    probability_fp: pred.probabilities[0],
+                    probability_candidate: pred.probabilities[1],
+                    probability_confirmed: pred.probabilities[2]
+                }));
+                
+                this.dataLoader.exportToCSV({ data: csvData }, filename);
+            }
+            
+            this.updateStatus(`Predictions exported successfully as ${filename}`);
+        } catch (error) {
+            console.error('Export failed:', error);
+            this.showError('Export failed: ' + error.message);
+        }
+    }
+
+    async loadPCAParameters() {
         try {
             this.pcaParams = await ModelUtils.loadPCAParams();
             if (this.pcaParams) {
@@ -128,7 +253,7 @@ export class ExoplanetDetectorApp {
             mean: [2.5, 8.0, 3.2, 1.0, 5500, 0.5],
             scale: [1.2, 5.0, 1.5, 0.8, 1000, 0.3],
             n_components: 3,
-            feature_names: ['period', 'duration', 'depth', 'stellar_radius', 'stellar_temp', 'impact_parameter'] //Thats not all there are more features
+            feature_names: ['period', 'duration', 'depth', 'stellar_radius', 'stellar_temp', 'impact_parameter']
         };
         
         console.log('Using mock PCA parameters');
@@ -276,6 +401,9 @@ export class ExoplanetDetectorApp {
                 });
             }
             
+            // Store predictions for export
+            this.lastPredictions = results;
+            
             // Clean up tensors
             pcaFeatures.dispose();
             probabilities.dispose();
@@ -290,12 +418,6 @@ export class ExoplanetDetectorApp {
             throw new Error('Batch prediction failed: ' + error.message);
         }
     }
-
-
-    /**😑😑😑😑😑😑😑😑😑😑😑😑😑
-     * 
-     * Add a model whose role is to get in candidates and predict if they are confirmed or not 
-     */
 
     getClassificationLabel(classIndex) {
         const labels = ['FALSE POSITIVE', 'CANDIDATE', 'CONFIRMED'];
@@ -334,12 +456,16 @@ export class ExoplanetDetectorApp {
             
             const processedData = await this.dataLoader.loadFile(file);
             this.trainingData = processedData;
+            
+            // Preprocess the data
+            this.preprocessedData = this.dataProcessor.preprocessData(processedData.data);
+            
             console.log('File processed:', processedData);
-            this.updateStatus(`Processed ${processedData.rowCount} records`);
+            this.updateStatus(`Processed ${processedData.rowCount} records, ${this.preprocessedData.validCount} valid after preprocessing`);
             
             // Automatically start training if in researcher mode
-            if (this.currentMode === 'researcher' && processedData.features.rowCount > 0) {
-                await this.trainModels(processedData);
+            if (this.currentMode === 'researcher' && this.preprocessedData.features.length > 0) {
+                await this.trainModels(this.preprocessedData);
             }
             
             return processedData;
@@ -403,10 +529,9 @@ export class ExoplanetDetectorApp {
         });
     }
 
-    updateModelConfigDisplay(modelName, config) // TO DO
-    {
-        updateModelDisplay(modelName);
-
+    updateModelConfigDisplay(modelName, config) {
+        // TO DO - Implement model configuration display
+        console.log(`Update config display for ${modelName}:`, config);
     }
 
     showError(message) {
@@ -447,13 +572,24 @@ export class ExoplanetDetectorApp {
         // Set up global event listeners
         window.switchMode = (mode) => this.switchMode(mode);
         window.setActiveModel = (modelName) => this.setActiveModel(modelName);
-        window.trainModels = () => this.trainModels(this.trainingData);
+        window.trainModels = () => this.trainModels(this.preprocessedData || this.trainingData);
         window.predictSingle = () => this.handleSinglePrediction();
         window.batchPredict = () => this.handleBatchPrediction();
         window.handleFileUpload = (event) => this.handleFileUpload(event);
-        window.updatePCAComponents = (num) => updatePCAComponents(num);
+        window.updatePCAComponents = (num) => this.updatePCAComponents(num);
         window.updateHyperparameter = (param, value, model) => 
             this.updateHyperparameters(model || 'mlp-deep', { [param]: value });
+        
+        // Export event listeners
+        window.exportData = (format) => this.exportProcessedData(format);
+        window.exportPreprocessed = (format) => this.exportPreprocessedData(format);
+        window.exportPredictions = (format) => {
+            if (this.lastPredictions) {
+                this.exportModelPredictions(this.lastPredictions, format);
+            } else {
+                this.showError('No predictions available for export. Please run predictions first.');
+            }
+        };
     }
 
     async handleSinglePrediction() {
@@ -473,14 +609,16 @@ export class ExoplanetDetectorApp {
     }
 
     async handleBatchPrediction() {
-        if (!this.trainingData || this.trainingData.features.length === 0) {
+        if (!this.trainingData || !this.trainingData.data || this.trainingData.data.length === 0) {
             // Generate mock data for demo
-            // Dont forget to remove all the mock stuffs
             const mockFeatures = this.dataProcessor.generateMockDataset(100);
             const results = await this.batchPredict(mockFeatures);
             this.displayBatchResults(results);
         } else {
-            const results = await this.batchPredict(this.trainingData.features.slice(0, 50));
+            const features = this.trainingData.data.slice(0, 50).map(record => {
+                return this.dataProcessor.requiredFeatures.map(feature => record[feature] || 0);
+            });
+            const results = await this.batchPredict(features);
             this.displayBatchResults(results);
         }
     }
