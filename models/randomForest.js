@@ -1,38 +1,33 @@
 import * as tf from '@tensorflow/tfjs';
 import { BaseModel, ModelUtils } from './base.js';
 
-/**
- * Random Forest implementation using ensemble of decision tree-like neural networks
- */
 export class RandomForestModel extends BaseModel {
     constructor(config = {}) {
         const defaultConfig = {
             nEstimators: 100,
-            maxDepth: 10,
+            maxDepth: 6, // Reduced from 10
             minSamplesSplit: 2,
             minSamplesLeaf: 1,
-            maxFeatures: 'sqrt', // 'sqrt', 'log2', number, or null
+            maxFeatures: 'sqrt',
             bootstrap: true,
             randomState: null,
             numClasses: 3,
-            subsampleRatio: 0.8
+            subsampleRatio: 0.5 // Reduced from 0.8
         };
         
         super('RandomForest', { ...defaultConfig, ...config });
         this.trees = [];
         this.featureImportances = null;
         this.outOfBagScore = null;
+        this.nMaxFeatures = null;
     }
 
     createDecisionTree(inputSize, maxDepth) {
-        // Create a neural network that mimics decision tree behavior
         const layers = [];
-        
-        // Calculate tree structure
         const branchingFactor = 2;
         let currentWidth = inputSize;
         
-        // Create tree-like structure with decreasing layer sizes
+        // Simplified network structure
         for (let depth = 0; depth < maxDepth; depth++) {
             const layerWidth = Math.max(
                 this.config.numClasses,
@@ -41,33 +36,16 @@ export class RandomForestModel extends BaseModel {
             
             layers.push(tf.layers.dense({
                 units: layerWidth,
-                activation: depth === maxDepth - 1 ? 'linear' : 'relu',
+                activation: depth === maxDepth - 1 ? 'softmax' : 'relu',
                 inputShape: depth === 0 ? [inputSize] : undefined,
                 kernelInitializer: 'glorotNormal',
                 biasInitializer: 'zeros',
                 name: `tree_layer_${depth}`
             }));
             
-            // Add dropout for regularization (simulates random splits)
-            if (depth < maxDepth - 1) {
-                layers.push(tf.layers.dropout({
-                    rate: 0.1,
-                    name: `tree_dropout_${depth}`
-                }));
-            }
-            
             currentWidth = layerWidth;
             
             if (layerWidth <= this.config.numClasses) break;
-        }
-        
-        // Ensure output layer has correct size
-        if (layers[layers.length - 1].units !== this.config.numClasses) {
-            layers.push(tf.layers.dense({
-                units: this.config.numClasses,
-                activation: 'softmax',
-                name: 'tree_output'
-            }));
         }
         
         const model = tf.sequential({ layers });
@@ -88,19 +66,17 @@ export class RandomForestModel extends BaseModel {
             return Math.floor(Math.log2(totalFeatures));
         } else if (typeof this.config.maxFeatures === 'number') {
             return Math.min(this.config.maxFeatures, totalFeatures);
-        } else {
-            return totalFeatures; // Use all features
         }
+        return totalFeatures;
     }
 
-    async bootstrapSample(X, y) {
+    async bootstrapSample(X, y, fixedMaxFeatures = null) {
         const XTensor = X instanceof tf.Tensor ? X : tf.tensor2d(X);
         const yTensor = y instanceof tf.Tensor ? y : tf.tensor2d(y);
         
         const nSamples = XTensor.shape[0];
         const nFeatures = XTensor.shape[1];
         
-        // Bootstrap sampling (sampling with replacement)
         let sampleIndices;
         if (this.config.bootstrap) {
             sampleIndices = [];
@@ -109,23 +85,19 @@ export class RandomForestModel extends BaseModel {
                 sampleIndices.push(Math.floor(Math.random() * nSamples));
             }
         } else {
-            // Use all samples without replacement
             sampleIndices = Array.from(tf.util.createShuffledIndices(nSamples));
         }
         
-        // Feature subsampling
-        const maxFeatures = this.calculateMaxFeatures(nFeatures);
-        const featureIndicesArray = tf.util.createShuffledIndices(nFeatures).slice(0, maxFeatures);
+        const maxFeatures = fixedMaxFeatures || this.calculateMaxFeatures(nFeatures);
+        const featureIndicesArray = tf.util.createShuffledIndices(nFeatures);
+        const featureIndicesFlat = Array.from(featureIndicesArray.slice(0, maxFeatures));
+        const sampleIndicesTensor = tf.tensor1d(new Int32Array(sampleIndices), 'int32');
+        const featureIndicesTensor = tf.tensor1d(new Int32Array(featureIndicesFlat), 'int32');
+        const featureIndicesStored = tf.tensor1d(new Int32Array(featureIndicesFlat), 'int32');
         
-        // Convert to tensors
-        const sampleIndicesTensor = tf.tensor1d(sampleIndices, 'int32');
-        const featureIndicesTensor = tf.tensor1d(Array.from(featureIndicesArray), 'int32');
-        
-        // Sample data
         const XBootstrap = XTensor.gather(sampleIndicesTensor).gather(featureIndicesTensor, 1);
         const yBootstrap = yTensor.gather(sampleIndicesTensor);
         
-        // Out-of-bag samples for evaluation
         let oobIndices = null;
         if (this.config.bootstrap) {
             const usedIndices = new Set(sampleIndices);
@@ -137,7 +109,10 @@ export class RandomForestModel extends BaseModel {
             }
         }
         
-        // Clean up
+        if (!this.nMaxFeatures) {
+            this.nMaxFeatures = maxFeatures;
+        }
+        
         if (!(X instanceof tf.Tensor)) XTensor.dispose();
         if (!(y instanceof tf.Tensor)) yTensor.dispose();
         sampleIndicesTensor.dispose();
@@ -146,19 +121,19 @@ export class RandomForestModel extends BaseModel {
         return { 
             XBootstrap, 
             yBootstrap, 
-            featureIndices: Array.from(featureIndicesArray), // Return as array for later use
+            featureIndices: featureIndicesStored, 
             oobIndices,
-            sampleIndices 
+            sampleIndices,
+            maxFeatures
         };
     }
 
-    async fit(X, y, validationSplit = 0.0) {
+    async fit(X, y, validationSplit = 0.1) {
         console.log(`Training Random Forest with ${this.config.nEstimators} trees...`);
         
         const XTensor = X instanceof tf.Tensor ? X : tf.tensor2d(X);
         const inputSize = XTensor.shape[1];
         
-        // Convert labels to one-hot if needed
         let yTensor;
         if (y instanceof tf.Tensor) {
             yTensor = y;
@@ -166,12 +141,37 @@ export class RandomForestModel extends BaseModel {
             yTensor = ModelUtils.oneHotEncode(y, this.config.numClasses);
         }
         
+        let XTrain = XTensor;
+        let yTrain = yTensor;
+        let XVal = null;
+        let yVal = null;
+        
+        if (validationSplit > 0) {
+            const nVal = Math.floor(XTensor.shape[0] * validationSplit);
+            const nTrain = XTensor.shape[0] - nVal;
+            const indicesArray = tf.util.createShuffledIndices(XTensor.shape[0]);
+            const valIndicesFlat = Array.from(indicesArray.slice(0, nVal));
+            const valIndices = tf.tensor1d(new Int32Array(valIndicesFlat), 'int32');
+            const trainIndicesFlat = Array.from(indicesArray.slice(nVal));
+            const trainIndices = tf.tensor1d(new Int32Array(trainIndicesFlat), 'int32');
+            
+            XVal = XTensor.gather(valIndices, 0);
+            yVal = yTensor.gather(valIndices, 0);
+            XTrain = XTensor.gather(trainIndices, 0);
+            yTrain = yTensor.gather(trainIndices, 0);
+            
+            valIndices.dispose();
+            trainIndices.dispose();
+        }
+        
         this.trees = [];
         const oobPredictions = [];
         const oobIndicesAll = [];
+        const trainLosses = [];
+        const valLosses = [];
         
-        // Train trees in parallel batches to avoid memory issues
-        const batchSize = Math.min(10, this.config.nEstimators);
+        // Increased batch size for more parallelism
+        const batchSize = Math.min(20, this.config.nEstimators);
         const numBatches = Math.ceil(this.config.nEstimators / batchSize);
         
         for (let batch = 0; batch < numBatches; batch++) {
@@ -180,81 +180,93 @@ export class RandomForestModel extends BaseModel {
             const batchPromises = [];
             
             for (let i = batchStart; i < batchEnd; i++) {
-                batchPromises.push(this.trainSingleTree(XTensor, yTensor, i));
+                batchPromises.push(this.trainSingleTree(XTrain, yTrain, i));
             }
             
             const batchResults = await Promise.all(batchPromises);
             
-            // Collect results
             for (const result of batchResults) {
                 if (result.success) {
-                    console.log("trained Tree: ", result.index);
+                    console.log(`Trained Tree ${result.index + 1}`);
                     this.trees.push(result.tree);
                     if (result.oobPredictions) {
                         oobPredictions.push(result.oobPredictions);
                         oobIndicesAll.push(result.oobIndices);
                     }
                 } else {
-                    console.warn(`Tree ${result.index} training failed:`, result.error);
+                    console.warn(`Tree ${result.index + 1} training failed:`, result.error);
                 }
             }
             
-            console.log(`Batch ${batch + 1}/${numBatches} completed. Trees trained: ${this.trees.length}`);
+            // Compute loss every few batches to reduce overhead
+            if (this.trees.length > 0 && (batch + 1) % Math.ceil(numBatches / 5) === 0) {
+                const trainPred = await this.predict(XTrain);
+                const trainLoss = tf.losses.softmaxCrossEntropy(yTrain, trainPred);
+                const trainLossValue = await trainLoss.data();
+                trainLosses.push(trainLossValue[0]);
+                trainLoss.dispose();
+                trainPred.dispose();
+                
+                if (XVal) {
+                    const valPred = await this.predict(XVal);
+                    const valLoss = tf.losses.softmaxCrossEntropy(yVal, valPred);
+                    const valLossValue = await valLoss.data();
+                    valLosses.push(valLossValue[0]);
+                    valLoss.dispose();
+                    valPred.dispose();
+                }
+                
+                console.log(`Batch ${batch + 1}/${numBatches} - Train Loss: ${trainLosses[trainLosses.length - 1].toFixed(4)}${XVal && valLosses.length > 0 ? ` - Val Loss: ${valLosses[valLosses.length - 1].toFixed(4)}` : ''}`);
+            }
         }
         
-        // Calculate out-of-bag score
         if (oobPredictions.length > 0) {
-            this.outOfBagScore = await this.calculateOOBScore(
-                oobPredictions, oobIndicesAll, yTensor
-            );
+            this.outOfBagScore = await this.calculateOOBScore(oobPredictions, oobIndicesAll, yTrain);
             console.log(`Out-of-bag accuracy: ${this.outOfBagScore.toFixed(4)}`);
         }
         
-        // Calculate feature importances
         await this.calculateFeatureImportances(inputSize);
         
         this.trained = true;
         
-        // Clean up
         if (!(X instanceof tf.Tensor)) XTensor.dispose();
         if (!(y instanceof tf.Tensor)) yTensor.dispose();
+        if (XVal) { XVal.dispose(); yVal.dispose(); }
+        if (XTrain !== XTensor) { XTrain.dispose(); yTrain.dispose(); }
         
         return {
             nTrees: this.trees.length,
             oobScore: this.outOfBagScore,
-            featureImportances: this.featureImportances
+            featureImportances: this.featureImportances,
+            trainLosses,
+            valLosses
         };
     }
 
     async trainSingleTree(X, y, treeIndex) {
         try {
-            // Bootstrap sample
-            const { XBootstrap, yBootstrap, featureIndices, oobIndices } = 
-                await this.bootstrapSample(X, y);
+            const { XBootstrap, yBootstrap, featureIndices, oobIndices, maxFeatures } = 
+                await this.bootstrapSample(X, y, this.nMaxFeatures);
             
-            // Create and train tree
-            const tree = this.createDecisionTree(XBootstrap.shape[1], this.config.maxDepth);
+            const tree = this.createDecisionTree(maxFeatures, this.config.maxDepth);
             
+            // Reduced epochs
             await tree.fit(XBootstrap, yBootstrap, {
-                epochs: 50,
-                batchSize: Math.min(32, XBootstrap.shape[0]),
+                epochs: 10, // Reduced from 50
+                batchSize: Math.min(64, XBootstrap.shape[0]), // Increased batch size
                 verbose: 0,
                 shuffle: true
             });
             
-            /// Out-of-bag predictions
             let oobPredictions = null;
             if (oobIndices && oobIndices.length > 0) {
-                const oobIndicesTensor = tf.tensor1d(oobIndices, 'int32');
-                const featureIndicesTensor = tf.tensor1d(featureIndices, 'int32');
-                const XOob = X.gather(oobIndicesTensor).gather(featureIndicesTensor, 1);
+                const oobIndicesTensor = tf.tensor1d(new Int32Array(oobIndices), 'int32');
+                const XOob = X.gather(oobIndicesTensor).gather(featureIndices, 1);
                 oobPredictions = await tree.predict(XOob);
                 XOob.dispose();
                 oobIndicesTensor.dispose();
-                featureIndicesTensor.dispose();
             }
             
-            // Clean up bootstrap data
             XBootstrap.dispose();
             yBootstrap.dispose();
             
@@ -265,7 +277,6 @@ export class RandomForestModel extends BaseModel {
                 oobIndices,
                 index: treeIndex
             };
-            
         } catch (error) {
             return {
                 success: false,
@@ -276,26 +287,25 @@ export class RandomForestModel extends BaseModel {
     }
 
     async predict(X) {
-        if (!this.trained || this.trees.length === 0) {
+        if (!this.trained && this.trees.length === 0) {
             throw new Error('Random Forest must be trained before prediction');
         }
         
         const XTensor = X instanceof tf.Tensor ? X : tf.tensor2d(X);
-        const nSamples = XTensor.shape[0];
-        
-        // Collect predictions from all trees
         const treePredictions = [];
         
         for (const tree of this.trees) {
             try {
-                const featureIndicesTensor = tf.tensor1d(tree.featureIndices, 'int32');
+                const featureIndicesTensor = tree.featureIndices;
+                if (!featureIndicesTensor || featureIndicesTensor.isDisposed) {
+                    throw new Error(`featureIndices tensor for tree ${this.trees.indexOf(tree)} is invalid`);
+                }
                 const XSubset = XTensor.gather(featureIndicesTensor, 1);
                 const prediction = await tree.model.predict(XSubset);
                 treePredictions.push(prediction);
                 XSubset.dispose();
-                featureIndicesTensor.dispose();
             } catch (error) {
-                console.warn('Error in tree prediction:', error);
+                console.warn(`Error in tree ${this.trees.indexOf(tree)} prediction:`, error);
             }
         }
         
@@ -303,9 +313,7 @@ export class RandomForestModel extends BaseModel {
             throw new Error('No valid tree predictions available');
         }
         
-        // Average predictions across all trees
         let sumPredictions = treePredictions[0];
-        
         for (let i = 1; i < treePredictions.length; i++) {
             const temp = sumPredictions.add(treePredictions[i]);
             if (i > 1) sumPredictions.dispose();
@@ -314,7 +322,6 @@ export class RandomForestModel extends BaseModel {
         
         const avgPredictions = sumPredictions.div(tf.scalar(treePredictions.length));
         
-        // Clean up
         if (!(X instanceof tf.Tensor)) XTensor.dispose();
         treePredictions.forEach((pred, i) => {
             if (i > 0) pred.dispose();
@@ -332,17 +339,14 @@ export class RandomForestModel extends BaseModel {
     }
 
     async calculateOOBScore(oobPredictions, oobIndicesAll, yTrue) {
-        // Aggregate out-of-bag predictions
         const nSamples = yTrue.shape[0];
         const nClasses = yTrue.shape[1];
         
-        // Initialize aggregation arrays
         const oobVotes = new Array(nSamples).fill(null).map(() => 
             new Array(nClasses).fill(0)
         );
         const oobCounts = new Array(nSamples).fill(0);
         
-        // Aggregate votes from each tree
         for (let treeIdx = 0; treeIdx < oobPredictions.length; treeIdx++) {
             const predictions = await oobPredictions[treeIdx].data();
             const indices = oobIndicesAll[treeIdx];
@@ -354,20 +358,18 @@ export class RandomForestModel extends BaseModel {
                 }
                 oobCounts[sampleIdx]++;
             }
+            oobPredictions[treeIdx].dispose();
         }
         
-        // Calculate accuracy for samples with OOB predictions
         let correct = 0;
         let total = 0;
         const yTrueData = await yTrue.data();
         
         for (let i = 0; i < nSamples; i++) {
             if (oobCounts[i] > 0) {
-                // Average the votes
                 const avgVotes = oobVotes[i].map(vote => vote / oobCounts[i]);
                 const predictedClass = avgVotes.indexOf(Math.max(...avgVotes));
                 
-                // Get true class
                 let trueClass = 0;
                 for (let j = 0; j < nClasses; j++) {
                     if (yTrueData[i * nClasses + j] === 1) {
@@ -388,30 +390,22 @@ export class RandomForestModel extends BaseModel {
         const importances = new Array(nFeatures).fill(0);
         const featureUsageCounts = new Array(nFeatures).fill(0);
         
-        // Calculate importance based on feature usage and tree performance
         for (const tree of this.trees) {
             const weight = 1.0 / this.trees.length;
-            
-            for (const featureIdx of tree.featureIndices) {
+            for (const featureIdx of tree.featureIndices.dataSync()) {
                 importances[featureIdx] += weight;
                 featureUsageCounts[featureIdx]++;
             }
         }
         
-        // Normalize by usage frequency
         for (let i = 0; i < nFeatures; i++) {
             if (featureUsageCounts[i] > 0) {
                 importances[i] /= featureUsageCounts[i];
             }
         }
         
-        // Final normalization
         const maxImportance = Math.max(...importances);
-        if (maxImportance > 0) {
-            this.featureImportances = importances.map(imp => imp / maxImportance);
-        } else {
-            this.featureImportances = importances;
-        }
+        this.featureImportances = maxImportance > 0 ? importances.map(imp => imp / maxImportance) : importances;
         
         return this.featureImportances;
     }
@@ -431,29 +425,20 @@ export class RandomForestModel extends BaseModel {
     updateHyperparameters(newConfig) {
         this.updateConfig(newConfig);
         
-        // Mark as untrained if significant parameters changed
         const significantParams = [
             'nEstimators', 'maxDepth', 'minSamplesSplit', 
             'maxFeatures', 'bootstrap'
         ];
         
-        const hasSignificantChange = significantParams.some(param => 
-            newConfig.hasOwnProperty(param)
-        );
-        
-        if (hasSignificantChange) {
+        if (significantParams.some(param => newConfig.hasOwnProperty(param))) {
             this.trained = false;
             this.dispose();
             this.trees = [];
+            this.nMaxFeatures = null;
         }
     }
 
     async partialFit(X, y, nNewTrees = 10) {
-        // Add new trees to existing forest
-        if (!this.trained) {
-            return await this.fit(X, y);
-        }
-        
         console.log(`Adding ${nNewTrees} new trees to existing forest...`);
         
         const XTensor = X instanceof tf.Tensor ? X : tf.tensor2d(X);
@@ -473,12 +458,10 @@ export class RandomForestModel extends BaseModel {
             }
         }
         
-        // Recalculate feature importances
         await this.calculateFeatureImportances(XTensor.shape[1]);
         
         console.log(`Added ${this.trees.length - originalTreeCount} trees. Total: ${this.trees.length}`);
         
-        // Clean up
         if (!(X instanceof tf.Tensor)) XTensor.dispose();
         if (!(y instanceof tf.Tensor)) yTensor.dispose();
         
@@ -489,16 +472,19 @@ export class RandomForestModel extends BaseModel {
     }
 
     dispose() {
-        // Dispose all tree models
         this.trees.forEach(tree => {
             if (tree.model) {
                 tree.model.dispose();
+            }
+            if (tree.featureIndices && !tree.featureIndices.isDisposed) {
+                tree.featureIndices.dispose();
             }
         });
         
         this.trees = [];
         this.featureImportances = null;
         this.outOfBagScore = null;
+        this.nMaxFeatures = null;
         
         super.dispose();
     }
