@@ -90,7 +90,7 @@ export class ModelUtils {
         return tf.argMax(predictions, -1);
     }
 
-    static async loadPCAParams(path = '/dataset/output/pca_params.json') {
+    static async loadPCAParams(path = '../dataset/output/pca_params.json') {
         try {
             const response = await fetch(path);
             return await response.json();
@@ -175,11 +175,11 @@ export class ModelUtils {
 
         return {
             mean: pcaParams.mean,
-            scale: pcaParams.scale || pcaParams.std,
-            pca_components: pcaParams.pca_components || pcaParams.components,
-            explained_variance_ratio: pcaParams.explained_variance_ratio,
-            n_components: pcaParams.n_components,
-            feature_names: pcaParams.feature_names || pcaParams.selected_features
+            scale: pcaParams.scale,
+            pca_components: pcaParams.components,
+            explained_variance_ratio: pcaParams.variance,
+            n_components: pcaParams.components.length,
+            feature_names: pcaParams.features
         };
     }
 }
