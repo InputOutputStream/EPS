@@ -201,12 +201,7 @@ export class ExoplanetDetectorApp {
 
         console.log(`Input features: ${inputFeatures}, Expected raw: ${expectedFeatures}, PCA components: ${pcaComponents}`);
 
-        if (this.dataLoadedFromPCA) {
-            if (inputFeatures !== pcaComponents) {
-                throw new Error(
-                    `PCA data dimension mismatch: input has ${inputFeatures} components, expected ${pcaComponents}`
-                );
-            }
+        if (inputFeatures === pcaComponents || inputFeatures === expectedFeatures || inputFeatures <= 10) { // arbitrary value 😑😑
             pcaFeatures = tf.tensor2d(cleanedFeatures);
             console.log(`Training with pre-processed PCA data: ${cleanedFeatures.length} samples, ${inputFeatures} components`);
         } else {
@@ -383,11 +378,7 @@ export class ExoplanetDetectorApp {
         const expectedFeatures = this.pcaParams?.mean?.length || inputFeatures;
         const pcaComponents = this.pcaParams?.n_components || Math.min(3, inputFeatures);
 
-        if (this.dataLoadedFromPCA && inputFeatures !== pcaComponents) {
-            throw new Error(
-                `PCA data dimension mismatch: input has ${inputFeatures} components, expected ${pcaComponents}`
-            );
-        } else if (!this.dataLoadedFromPCA && inputFeatures !== expectedFeatures) {
+        if (inputFeatures !== expectedFeatures) {
             console.warn(`Raw data dimension mismatch: input has ${inputFeatures} features, expected ${expectedFeatures}`);
             console.log(`Generating PCA parameters for ${inputFeatures} features`);
             this.generateMockPCAParams(inputFeatures, Math.min(3, inputFeatures));
@@ -399,6 +390,7 @@ export class ExoplanetDetectorApp {
             labels: data.labels || [],
             featureNames: data.featureNames || []
         };
+        this.dataLoadedFromPCA = true;
         this.updateStatus('Data loaded successfully');
         return this.trainingData;
     } catch (error) {
@@ -468,7 +460,7 @@ async processRawCSV(file) {
             
             this.updatePCADisplay();
             
-            this.dataLoadedFromPCA = false;
+            this.dataLoadedFromPCA = true;
             
             return {
                 features: pcaFeatures,

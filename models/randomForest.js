@@ -110,16 +110,20 @@ export class RandomForestModel extends BaseModel {
             }
         } else {
             // Use all samples without replacement
-            sampleIndices = tf.util.createShuffledIndices(nSamples);
+            sampleIndices = Array.from(tf.util.createShuffledIndices(nSamples));
         }
         
         // Feature subsampling
         const maxFeatures = this.calculateMaxFeatures(nFeatures);
-        const featureIndices = tf.util.createShuffledIndices(nFeatures).slice(0, maxFeatures);
+        const featureIndicesArray = tf.util.createShuffledIndices(nFeatures).slice(0, maxFeatures);
+        
+        // Convert to tensors
+        const sampleIndicesTensor = tf.tensor1d(sampleIndices, 'int32');
+        const featureIndicesTensor = tf.tensor1d(Array.from(featureIndicesArray), 'int32');
         
         // Sample data
-        const XBootstrap = XTensor.gather(sampleIndices).gather(featureIndices, 1);
-        const yBootstrap = yTensor.gather(sampleIndices);
+        const XBootstrap = XTensor.gather(sampleIndicesTensor).gather(featureIndicesTensor, 1);
+        const yBootstrap = yTensor.gather(sampleIndicesTensor);
         
         // Out-of-bag samples for evaluation
         let oobIndices = null;
@@ -133,14 +137,16 @@ export class RandomForestModel extends BaseModel {
             }
         }
         
-        // Clean up if we created tensors
+        // Clean up
         if (!(X instanceof tf.Tensor)) XTensor.dispose();
         if (!(y instanceof tf.Tensor)) yTensor.dispose();
+        sampleIndicesTensor.dispose();
+        featureIndicesTensor.dispose();
         
         return { 
             XBootstrap, 
             yBootstrap, 
-            featureIndices, 
+            featureIndices: Array.from(featureIndicesArray), // Return as array for later use
             oobIndices,
             sampleIndices 
         };
@@ -182,6 +188,7 @@ export class RandomForestModel extends BaseModel {
             // Collect results
             for (const result of batchResults) {
                 if (result.success) {
+                    console.log("trained Tree: ", result.index);
                     this.trees.push(result.tree);
                     if (result.oobPredictions) {
                         oobPredictions.push(result.oobPredictions);
@@ -235,12 +242,16 @@ export class RandomForestModel extends BaseModel {
                 shuffle: true
             });
             
-            // Out-of-bag predictions
+            /// Out-of-bag predictions
             let oobPredictions = null;
             if (oobIndices && oobIndices.length > 0) {
-                const XOob = X.gather(oobIndices).gather(featureIndices, 1);
+                const oobIndicesTensor = tf.tensor1d(oobIndices, 'int32');
+                const featureIndicesTensor = tf.tensor1d(featureIndices, 'int32');
+                const XOob = X.gather(oobIndicesTensor).gather(featureIndicesTensor, 1);
                 oobPredictions = await tree.predict(XOob);
                 XOob.dispose();
+                oobIndicesTensor.dispose();
+                featureIndicesTensor.dispose();
             }
             
             // Clean up bootstrap data
@@ -277,10 +288,12 @@ export class RandomForestModel extends BaseModel {
         
         for (const tree of this.trees) {
             try {
-                const XSubset = XTensor.gather(tree.featureIndices, 1);
+                const featureIndicesTensor = tf.tensor1d(tree.featureIndices, 'int32');
+                const XSubset = XTensor.gather(featureIndicesTensor, 1);
                 const prediction = await tree.model.predict(XSubset);
                 treePredictions.push(prediction);
                 XSubset.dispose();
+                featureIndicesTensor.dispose();
             } catch (error) {
                 console.warn('Error in tree prediction:', error);
             }

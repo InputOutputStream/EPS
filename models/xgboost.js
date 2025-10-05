@@ -82,11 +82,13 @@ export class XGBoostModel extends BaseModel {
         
         // Row subsampling
         const nRowSample = Math.floor(nSamples * this.config.subsample);
-        const rowIndices = tf.util.createShuffledIndices(nSamples).slice(0, nRowSample);
+        const rowIndicesArray = tf.util.createShuffledIndices(nSamples).slice(0, nRowSample);
+        const rowIndices = tf.tensor1d(rowIndicesArray, 'int32');  // Convert to tensor
         
         // Column subsampling
         const nColSample = Math.floor(nFeatures * this.config.colsampleByTree);
-        const colIndices = tf.util.createShuffledIndices(nFeatures).slice(0, nColSample);
+        const colIndicesArray = tf.util.createShuffledIndices(nFeatures).slice(0, nColSample);
+        const colIndices = tf.tensor1d(colIndicesArray, 'int32');  // Convert to tensor
         
         // Sample data
         const XSampled = XTensor.gather(rowIndices).gather(colIndices, 1);
@@ -95,8 +97,9 @@ export class XGBoostModel extends BaseModel {
         // Clean up if we created tensors
         if (!(X instanceof tf.Tensor)) XTensor.dispose();
         if (!(y instanceof tf.Tensor)) yTensor.dispose();
+        rowIndices.dispose();  // Clean up index tensors
         
-        return { XSampled, ySampled, rowIndices, colIndices };
+        return { XSampled, ySampled, rowIndices: colIndicesArray, colIndices: colIndicesArray };
     }
 
     async computeGradients(yTrue, yPred) {
@@ -136,13 +139,20 @@ export class XGBoostModel extends BaseModel {
         
         if (validationSplit > 0) {
             const nVal = Math.floor(XTensor.shape[0] * validationSplit);
-            const valIndices = tf.util.createShuffledIndices(XTensor.shape[0]).slice(0, nVal);
-            const trainIndices = tf.util.createShuffledIndices(XTensor.shape[0]).slice(nVal);
+            const valIndicesArray = tf.util.createShuffledIndices(XTensor.shape[0]).slice(0, nVal);
+            const trainIndicesArray = tf.util.createShuffledIndices(XTensor.shape[0]).slice(nVal);
+            
+            console.log(valIndicesArray.length, trainIndicesArray.length);
+            const valIndices = tf.tensor1d(valIndicesArray, 'int32');
+            const trainIndices = tf.tensor1d(trainIndicesArray, 'int32');
             
             XVal = XTensor.gather(valIndices);
             yVal = yTensor.gather(valIndices);
             XTrain = XTensor.gather(trainIndices);
             yTrain = yTensor.gather(trainIndices);
+            
+            valIndices.dispose();
+            trainIndices.dispose();
         }
         
         // Boosting iterations
