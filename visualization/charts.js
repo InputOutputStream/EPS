@@ -17,6 +17,18 @@ export class Visualizer {
                 secondary: '#ff0080'
             }
         };
+
+        // Known plot ids to purge on dispose
+        this.knownPlotIds = new Set([
+            'pca-biplot',
+            'feature-importance',
+            'model-comparison',
+            'roc-curve',
+            'light-curve',
+            'batch-chart',
+            'batch-results-chart',
+            'split-visualization'
+        ]);
     }
 
     initializePlots() {
@@ -26,10 +38,50 @@ export class Visualizer {
         console.log('Visualization plots initialized');
     }
 
+    // ---------- Helpers ----------
+    async _toArrayIfTensor(maybeTensor) {
+        try {
+            if (!maybeTensor) return null;
+            if (typeof maybeTensor.array === 'function') {
+                // async tensor
+                return await maybeTensor.array();
+            } else if (typeof maybeTensor.arraySync === 'function') {
+                return maybeTensor.arraySync();
+            } else {
+                return maybeTensor;
+            }
+        } catch (err) {
+            console.warn('Failed to convert tensor to array:', err);
+            return maybeTensor;
+        }
+    }
+
+    _labelsToIndices(labels) {
+        // labels may be: [0,1,2,...] or one-hot arrays [[0,1,0],...]
+        if (!labels) return [];
+        if (!Array.isArray(labels)) return labels;
+
+        // detect one-hot: first element is array
+        if (Array.isArray(labels[0])) {
+            return labels.map(l => {
+                const idx = l.findIndex(v => v === 1);
+                return idx >= 0 ? idx : l.indexOf(Math.max(...l));
+            });
+        } else {
+            return labels;
+        }
+    }
+
+    _ensure3dPoint(pt) {
+        if (!pt) return [0,0,0];
+        return [pt[0] ?? 0, pt[1] ?? 0, pt[2] ?? 0];
+    }
+
+    // ---------- PCA / scatter ----------
     async updatePCAPlot(features, labels) {
         try {
-            const featuresArray = features.arraySync ? await features.arraySync() : features;
-            const labelsArray = labels.arraySync ? await labels.arraySync() : labels;
+            const featuresArray = await this._toArrayIfTensor(features) || [];
+            const labelsArray = await this._toArrayIfTensor(labels) || [];
             
             const traces = this.createClassTraces(featuresArray, labelsArray);
             
@@ -41,10 +93,12 @@ export class Visualizer {
                     yaxis: { title: 'PC2' },
                     zaxis: { title: 'PC3' },
                     bgcolor: 'rgba(0,0,0,0)'
-                }
+                },
+                margin: { l: 0, r: 0, b: 0, t: 40 }
             };
             
-            await Plotly.newPlot('pca-biplot', traces, layout, true);
+            const element = document.getElementById('pca-biplot');
+            if (element) await Plotly.newPlot(element, traces, layout, {responsive: true});
             
         } catch (error) {
             console.error('Error updating PCA plot:', error);
@@ -58,8 +112,10 @@ export class Visualizer {
             2: { name: 'CONFIRMED', color: this.plotConfigs.colors['CONFIRMED'], points: [] }
         };
         
+        const labelIndices = this._labelsToIndices(labels);
+        
         features.forEach((feature, index) => {
-            const label = labels[index];
+            const label = labelIndices[index];
             if (classData[label]) {
                 classData[label].points.push(feature);
             }
@@ -78,7 +134,8 @@ export class Visualizer {
                     marker: {
                         color: classInfo.color,
                         size: 4,
-                        opacity: 0.7
+                        opacity: 0.8,
+                        symbol: 'circle'
                     }
                 };
                 traces.push(trace);
@@ -88,6 +145,7 @@ export class Visualizer {
         return traces;
     }
 
+    // ---------- Feature importance / model comparison (existing) ----------
     async updateFeatureImportance(model, nComponents = null) {
         try {
             let importances = null;
@@ -139,7 +197,10 @@ export class Visualizer {
                 height: Math.max(400, featureNames.length * 25)
             };
             
-            await Plotly.newPlot('feature-importance', [trace], layout);
+            const element = document.getElementById('feature-importance');
+            if (element) {
+                await Plotly.newPlot(element, [trace], layout, {responsive: true});
+            }
             
         } catch (error) {
             console.error('Error updating feature importance:', error);
@@ -216,7 +277,7 @@ export class Visualizer {
             
             const element = document.getElementById('model-comparison');
             if (element) {
-                await Plotly.newPlot('model-comparison', traces, layout);
+                await Plotly.newPlot(element, traces, layout, {responsive: true});
             }
             
         } catch (error) {
@@ -224,6 +285,7 @@ export class Visualizer {
         }
     }
 
+    // ---------- ROC, sample light curve (existing) ----------
     generateROCCurve(metrics = { recall: 0.981 }) {
         const x = [];
         const y = [];
@@ -259,12 +321,13 @@ export class Visualizer {
             ...this.plotConfigs.defaultLayout,
             title: 'ROC Curve',
             xaxis: { title: 'False Positive Rate', range: [0, 1] },
-            yaxis: { title: 'True Positive Rate', range: [0, 1] }
+            yaxis: { title: 'True Positive Rate', range: [0, 1] },
+            height: 320
         };
         
         const element = document.getElementById('roc-curve');
         if (element) {
-            Plotly.newPlot('roc-curve', traces, layout);
+            Plotly.newPlot(element, traces, layout, {responsive: true});
         }
     }
 
@@ -288,15 +351,192 @@ export class Visualizer {
             ...this.plotConfigs.defaultLayout,
             title: 'PCA Component Importance',
             xaxis: { title: 'Explained Variance Ratio' },
-            yaxis: { title: 'Principal Components' }
+            yaxis: { title: 'Principal Components' },
+            height: 300
         };
         
         const element = document.getElementById('feature-importance');
         if (element) {
-            Plotly.newPlot('feature-importance', [trace], layout);
+            Plotly.newPlot(element, [trace], layout, {responsive: true});
         }
     }
 
+    // ---------- Split visualization (NEW) ----------
+    generateSplitVisualization(splits_stats) {
+        try {
+            if (!splits_stats) {
+                console.warn('No split stats provided to generateSplitVisualization');
+                return;
+            }
+
+            // build grouped bar for train/test confirmed vs false positive
+            const categories = ['Confirmed', 'False Positive'];
+            const trainVals = [splits_stats.train.confirmed || 0, splits_stats.train.falsePositive || 0];
+            const testVals = [splits_stats.test.confirmed || 0, splits_stats.test.falsePositive || 0];
+            const candidateCount = splits_stats.candidates || 0;
+
+            const traces = [
+                {
+                    x: categories,
+                    y: trainVals,
+                    name: 'Train',
+                    type: 'bar',
+                    marker: { color: this.plotConfigs.colors.primary }
+                },
+                {
+                    x: categories,
+                    y: testVals,
+                    name: 'Test',
+                    type: 'bar',
+                    marker: { color: this.plotConfigs.colors.secondary }
+                }
+            ];
+
+            const layout = {
+                ...this.plotConfigs.defaultLayout,
+                title: 'Data Split - Class Distribution',
+                barmode: 'group',
+                height: 300
+            };
+
+            // ensure container exists or create
+            let element = document.getElementById('split-visualization');
+            if (!element) {
+                const container = document.querySelector('.data-info') || document.querySelector('.container');
+                if (container) {
+                    const div = document.createElement('div');
+                    div.id = 'split-visualization';
+                    div.className = 'panel';
+                    container.appendChild(div);
+                    element = div;
+                }
+            }
+
+            if (element) {
+                Plotly.newPlot(element, traces, layout, {responsive: true});
+            }
+
+            // Donut summarizing counts (candidates & totals)
+            const donutElementId = 'split-summary-donut';
+            let donutElement = document.getElementById(donutElementId);
+            if (!donutElement && element && element.parentElement) {
+                const d = document.createElement('div');
+                d.id = donutElementId;
+                d.style.width = '220px';
+                d.style.height = '220px';
+                d.style.display = 'inline-block';
+                d.style.marginLeft = '20px';
+                element.parentElement.appendChild(d);
+                donutElement = d;
+            }
+
+            if (donutElement) {
+                const totalTrain = splits_stats.train.total || (trainVals[0] + trainVals[1]);
+                const totalTest = splits_stats.test.total || (testVals[0] + testVals[1]);
+                const values = [totalTrain, totalTest, candidateCount];
+                const labels = ['Train', 'Test', 'Candidates'];
+                const donutTrace = {
+                    labels,
+                    values,
+                    type: 'pie',
+                    hole: 0.5,
+                    marker: { colors: [this.plotConfigs.colors.primary, this.plotConfigs.colors.secondary, this.plotConfigs.colors.CANDIDATE] },
+                    textinfo: 'label+value'
+                };
+                const donutLayout = { ...this.plotConfigs.defaultLayout, title: 'Split Summary', height: 240, width: 240 };
+                Plotly.newPlot(donutElement, [donutTrace], donutLayout, {responsive: true});
+            }
+
+        } catch (error) {
+            console.error('Error generating split visualization:', error);
+        }
+    }
+
+    // ---------- PCA plot by split (NEW) ----------
+    async updatePCAPlotBySplit(trainingData, testData, candidatesData) {
+        try {
+            // Accept either {features, labels} or arrays directly
+            const trainFeat = await this._toArrayIfTensor(trainingData?.features || trainingData || []);
+            const trainLab = await this._toArrayIfTensor(trainingData?.labels || []);
+            const testFeat = await this._toArrayIfTensor(testData?.features || testData || []);
+            const testLab = await this._toArrayIfTensor(testData?.labels || []);
+            const candFeat = await this._toArrayIfTensor(candidatesData?.features || candidatesData || []);
+            const candLab = await this._toArrayIfTensor(candidatesData?.labels || []);
+
+            const trainLabels = this._labelsToIndices(trainLab);
+            const testLabels = this._labelsToIndices(testLab);
+            const candLabels = this._labelsToIndices(candLab);
+
+            const buildTraceFromSet = (featArr, labArr, setName, markerSpec) => {
+                if (!featArr || featArr.length === 0) return null;
+                // group by class to have consistent legend
+                const groups = {};
+                featArr.forEach((pt, i) => {
+                    const cls = labArr?.[i] ?? -1;
+                    if (!groups[cls]) groups[cls] = [];
+                    groups[cls].push(this._ensure3dPoint(pt));
+                });
+                const traces = [];
+                Object.entries(groups).forEach(([cls, pts]) => {
+                    const name = cls === '0' ? `${setName} - FALSE POSITIVE` : cls === '1' ? `${setName} - CANDIDATE` : cls === '2' ? `${setName} - CONFIRMED` : `${setName} - Unknown`;
+                    traces.push({
+                        x: pts.map(p => p[0]),
+                        y: pts.map(p => p[1]),
+                        z: pts.map(p => p[2]),
+                        mode: 'markers',
+                        type: 'scatter3d',
+                        name,
+                        marker: {
+                            size: markerSpec.size,
+                            symbol: markerSpec.symbol,
+                            color: markerSpec.colorMap?.[cls] ?? markerSpec.color,
+                            opacity: markerSpec.opacity
+                        },
+                        showlegend: true
+                    });
+                });
+                return traces;
+            };
+
+            const trainTraces = buildTraceFromSet(trainFeat, trainLabels, 'Train', {
+                size: 3, symbol: 'circle', color: this.plotConfigs.colors.primary, opacity: 0.7,
+                colorMap: { 0: this.plotConfigs.colors['FALSE POSITIVE'], 1: this.plotConfigs.colors['CANDIDATE'], 2: this.plotConfigs.colors['CONFIRMED'] }
+            }) || [];
+
+            const testTraces = buildTraceFromSet(testFeat, testLabels, 'Test', {
+                size: 4, symbol: 'diamond', color: this.plotConfigs.colors.secondary, opacity: 0.9,
+                colorMap: { 0: this.plotConfigs.colors['FALSE POSITIVE'], 1: this.plotConfigs.colors['CANDIDATE'], 2: this.plotConfigs.colors['CONFIRMED'] }
+            }) || [];
+
+            const candTraces = buildTraceFromSet(candFeat, candLabels, 'Candidates', {
+                size: 3, symbol: 'cross', color: '#ffffff', opacity: 0.85,
+                colorMap: { 0: this.plotConfigs.colors['FALSE POSITIVE'], 1: this.plotConfigs.colors['CANDIDATE'], 2: this.plotConfigs.colors['CONFIRMED'] }
+            }) || [];
+
+            const traces = [...trainTraces, ...testTraces, ...candTraces];
+            if (traces.length === 0) {
+                console.warn('No PCA points to plot in updatePCAPlotBySplit');
+                return;
+            }
+
+            const layout = {
+                ...this.plotConfigs.defaultLayout,
+                title: 'PCA by Split (3D)',
+                scene: { xaxis: { title: 'PC1' }, yaxis: { title: 'PC2' }, zaxis: { title: 'PC3' }, bgcolor: 'rgba(0,0,0,0)' },
+                margin: { t: 40 }
+            };
+
+            const element = document.getElementById('pca-biplot');
+            if (element) {
+                await Plotly.newPlot(element, traces, layout, {responsive: true});
+            }
+
+        } catch (error) {
+            console.error('Error in updatePCAPlotBySplit:', error);
+        }
+    }
+
+    // ---------- Sample light curve (existing) ----------
     generateSampleLightCurve(params = { period: 365, depth: 1000, duration: 13 }) {
         const time = [];
         const flux = [];
@@ -339,67 +579,106 @@ export class Visualizer {
                 arrowhead: 2,
                 arrowcolor: this.plotConfigs.colors.secondary,
                 font: { color: this.plotConfigs.colors.secondary }
-            }]
+            }],
+            height: 320
         };
         
         const element = document.getElementById('light-curve');
         if (element) {
-            Plotly.newPlot('light-curve', [trace], layout);
+            Plotly.newPlot(element, [trace], layout, {responsive: true});
         }
     }
 
+    // ---------- Batch chart (slightly more flexible) ----------
     generateBatchChart(results) {
-        const classifications = ['FALSE POSITIVE', 'CANDIDATE', 'CONFIRMED'];
-        const counts = classifications.map(classification => 
-            results.filter(r => r.result.classification === classification).length
-        );
-        
-        const colors = [
-            this.plotConfigs.colors['FALSE POSITIVE'],
-            this.plotConfigs.colors['CANDIDATE'],
-            this.plotConfigs.colors['CONFIRMED']
-        ];
-        
-        const trace = {
-            labels: classifications,
-            values: counts,
-            type: 'pie',
-            marker: { 
-                colors: colors,
-                line: { color: '#ffffff', width: 2 }
-            },
-            textfont: { color: '#ffffff', size: 14 },
-            textinfo: 'label+percent+value',
-            hovertemplate: '<b>%{label}</b><br>Count: %{value}<br>Percentage: %{percent}<extra></extra>'
-        };
-        
-        const layout = {
-            ...this.plotConfigs.defaultLayout,
-            title: 'Classification Distribution',
-            showlegend: true,
-            legend: {
-                orientation: 'v',
-                x: 1,
-                y: 0.5
+        try {
+            const classifications = ['FALSE POSITIVE', 'CANDIDATE', 'CONFIRMED'];
+            const counts = classifications.map(classification => 
+                results.filter(r => r.result.classification === classification).length
+            );
+            
+            const colors = [
+                this.plotConfigs.colors['FALSE POSITIVE'],
+                this.plotConfigs.colors['CANDIDATE'],
+                this.plotConfigs.colors['CONFIRMED']
+            ];
+
+            const trace = {
+                labels: classifications,
+                values: counts,
+                type: 'pie',
+                marker: { 
+                    colors: colors,
+                    line: { color: '#ffffff', width: 2 }
+                },
+                textfont: { color: '#ffffff', size: 14 },
+                textinfo: 'label+percent+value',
+                hovertemplate: '<b>%{label}</b><br>Count: %{value}<br>Percentage: %{percent}<extra></extra>'
+            };
+            
+            const layout = {
+                ...this.plotConfigs.defaultLayout,
+                title: 'Classification Distribution',
+                showlegend: true,
+                legend: {
+                    orientation: 'v',
+                    x: 1,
+                    y: 0.5
+                },
+                height: 360
+            };
+
+            // app.js sometimes renders into 'batch-results-chart' - prefer that if present
+            const preferredIds = ['batch-results-chart', 'batch-chart'];
+            let plotted = false;
+            for (const id of preferredIds) {
+                const el = document.getElementById(id);
+                if (el) {
+                    Plotly.newPlot(el, [trace], layout, {responsive: true});
+                    plotted = true;
+                    break;
+                }
             }
-        }
-        const element = document.getElementById('batch-chart');
-        if (element) {
-            Plotly.newPlot('batch-chart', [trace], layout);
+
+            if (!plotted) {
+                console.warn('No container found for batch chart (tried batch-results-chart and batch-chart)');
+            }
+
+        } catch (error) {
+            console.error('Error generating batch chart:', error);
         }
     }
 
+    // ---------- Resize & dispose ----------
     resizePlots() {
-        const plotIds = ['pca-biplot', 'feature-importance', 'model-comparison', 'roc-curve', 'light-curve', 'batch-chart'];
+        const plotIds = ['pca-biplot', 'feature-importance', 'model-comparison', 'roc-curve', 'light-curve', 'batch-chart', 'batch-results-chart', 'split-visualization'];
         plotIds.forEach(id => {
             const element = document.getElementById(id);
             if (element) {
-                Plotly.Plots.resize(element);
+                try {
+                    Plotly.Plots.resize(element);
+                } catch (err) {
+                    console.warn('Plotly resize failed for', id, err);
+                }
             }
         });
     }
 
     dispose(){
+        // purge known Plotly plots
+        this.knownPlotIds.forEach(id => {
+            const el = document.getElementById(id);
+            if (el) {
+                try {
+                    Plotly.purge(el);
+                } catch (err) {
+                    // fallback: remove children
+                    while (el.firstChild) el.removeChild(el.firstChild);
+                }
+            }
+        });
+
+        this.knownPlotIds.clear();
         console.log('Visualizer disposed');
     }
 }

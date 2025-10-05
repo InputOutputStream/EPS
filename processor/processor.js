@@ -29,7 +29,6 @@ export class DataProcessor {
             'disc_telescope', 'disc_instrument', 'st_spectype'
         ];
         
-        // Renamed from dropColumns to columnsToDropList to avoid naming conflict
         this.columnsToDropList = [
             'rowid', 'pl_name', 'hostname', 'pl_letter', 'k2_name',
             'epic_hostname', 'epic_candname', 'hd_name', 'hip_name',
@@ -46,7 +45,7 @@ export class DataProcessor {
         this.calculatedReputations = {};
     }
 
-    async preprocessData(csvData) {
+    async preprocessData(csvData, applyPCA = true) {
         console.log('\n=== PREPROCESSING PIPELINE ===');
         
         let data = csvData.data;
@@ -64,9 +63,9 @@ export class DataProcessor {
         data = this.encodeCategorical(data);
         
         // 5. Drop unnecessary columns
-        data = this.removeDropColumns(data); // Renamed method
+        data = this.removeDropColumns(data);
         
-        // 6. Extract labels
+        // 6. Extract labels BEFORE removing disposition
         const labels = this.extractLabels(data);
         data = data.map(row => {
             const { disposition, ...rest } = row;
@@ -88,12 +87,28 @@ export class DataProcessor {
         // 11. Log transform skewed
         const XTransformed = this.logTransformSkewed(XClean, selectedFeatures);
         
-        console.log(`\n✓ Final: ${XTransformed.length} records × ${XTransformed[0].length} features`);
+        // 12. Apply PCA if requested (CRITICAL FIX)
+        let finalFeatures;
+        if (applyPCA) {
+            console.log('\n=== APPLYING PCA TRANSFORMATION ===');
+            finalFeatures = await this.fitTransform(XTransformed);
+            console.log(`✓ PCA applied: ${XTransformed.length} samples × ${XTransformed[0].length} features → ${finalFeatures.length} × ${finalFeatures[0].length} components`);
+        } else {
+            finalFeatures = XTransformed;
+            console.log(`✓ Skipping PCA: ${XTransformed.length} samples × ${XTransformed[0].length} features`);
+        }
+        
+        console.log(`\n✓ Final: ${finalFeatures.length} records × ${finalFeatures[0].length} features`);
         
         return {
-            features: XTransformed,
+            features: finalFeatures,
             labels,
-            featureNames: selectedFeatures
+            featureNames: applyPCA ? 
+                Array.from({length: this.nComponents}, (_, i) => `PC${i+1}`) : 
+                selectedFeatures,
+            rawFeatures: XTransformed,
+            rawFeatureNames: selectedFeatures,
+            pcaApplied: applyPCA
         };
     }
 
@@ -215,7 +230,6 @@ export class DataProcessor {
         });
     }
 
-    // Renamed method to avoid conflict with this.columnsToDropList property
     removeDropColumns(data) {
         const toDrop = this.columnsToDropList.filter(col => data[0].hasOwnProperty(col));
         console.log(`Dropped ${toDrop.length} identifier columns`);
@@ -357,7 +371,6 @@ export class DataProcessor {
     }
 
     async mutualInformation(X, y) {
-        // Simplified MI calculation
         const n = X.length;
         const m = X[0].length;
         const miScores = [];
@@ -443,7 +456,7 @@ export class DataProcessor {
     }
 
     async fitTransform(X) {
-        console.log('\n=== APPLYING PCA ===');
+        console.log('Fitting PCA transform...');
         
         // Standardize
         const { mean, std } = this.calculateStats(X);
@@ -455,18 +468,15 @@ export class DataProcessor {
         
         // PCA via covariance matrix and eigendecomposition
         const n = XScaled.length;
-        const m = XScaled[0].length;
         
         // Compute covariance matrix
         const XTensor = tf.tensor2d(XScaled);
         const XTranspose = tf.transpose(XTensor);
         const covMatrix = tf.matMul(XTranspose, XTensor).div(n - 1);
         
-        // Get eigenvalues and eigenvectors using power iteration
-        // For browser compatibility, we'll use a simplified approach
         const covData = await covMatrix.array();
         
-        // Simplified eigendecomposition using numeric methods
+        // Simplified eigendecomposition
         const { eigenvalues, eigenvectors } = this.computeEigenPairs(covData, this.nComponents);
         
         // Sort by eigenvalues (descending)
@@ -611,13 +621,13 @@ export class DataProcessor {
 
     exportParams() {
         return {
-            mean: this.scaler.mean,
-            std: this.scaler.std,
-            components: this.pcaModel.components,
-            explained_variance_ratio: this.pcaModel.explainedVariance,
+            mean: this.scaler?.mean || [],
+            std: this.scaler?.std || [],
+            components: this.pcaModel?.components || [],
+            explained_variance_ratio: this.pcaModel?.explainedVariance || [],
             n_components: this.nComponents,
-            selected_features: this.selectedFeatures,
-            feature_importance: this.featureImportance
+            selected_features: this.selectedFeatures || [],
+            feature_importance: this.featureImportance || {}
         };
     }
 }

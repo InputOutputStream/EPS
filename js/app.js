@@ -1,11 +1,12 @@
 import { MLPModel } from '../models/mlp.js';
 import { XGBoostModel } from '../models/xgboost.js';
 import { RandomForestModel } from '../models/randomForest.js';
-import { EnsembleModel, EnsembleFactory } from '../models/ensemble.js';
+import { EnsembleModel } from '../models/ensemble.js';
 import { ModelUtils } from '../models/base.js';
 import { DataLoader } from '../loader/dataLoader.js';
 import { DataProcessor } from '../processor/processor.js';
 import { Visualizer } from '../visualization/charts.js';
+import { TrainTestSplit } from '../train_test_split/tts.js';
 
 export class ExoplanetDetectorApp {
     constructor() {
@@ -17,8 +18,11 @@ export class ExoplanetDetectorApp {
         this.dataProcessor = new DataProcessor();
         this.pcaParams = null;
         this.trainingData = null;
+        this.testData = null;
+        this.candidatesData = null;
+        this.splitStats = null;
         this.isTraining = false;
-        this.dataLoadedFromPCA = false; // Track if using pre-processed PCA data
+        this.dataLoadedFromPCA = false;
         
         this.initializeModels();
         this.setupEventListeners();
@@ -28,24 +32,17 @@ export class ExoplanetDetectorApp {
         console.log('Initializing EDA...');
         
         try {
-            // Load PCA parameters
             await this.loadPCAParameters();
-            
-            // Initialize visualizations
             this.visualizer.initializePlots();
-            
-            // Set default active model
             this.setActiveModel('ensemble');
-            
             console.log('Application initialized successfully');
         } catch (error) {
             console.error('Initialization failed:', error);
-            this.showError('Failed to initialize application: ' + error.message);
+            this.showNotification('Failed to initialize application: ' + error.message, 'error');
         }
     }
 
     initializeModels() {
-        // Deep MLP Model
         this.models.set('mlp-deep', new MLPModel({
             hiddenLayers: [128, 64, 32],
             activation: 'relu',
@@ -55,7 +52,6 @@ export class ExoplanetDetectorApp {
             batchSize: 32
         }));
 
-        // Shallow MLP Model  
         this.models.set('mlp-shallow', new MLPModel({
             hiddenLayers: [32, 16],
             activation: 'tanh',
@@ -65,7 +61,6 @@ export class ExoplanetDetectorApp {
             batchSize: 64
         }));
 
-        // XGBoost Model
         this.models.set('xgboost', new XGBoostModel({
             nEstimators: 100,
             maxDepth: 6,
@@ -74,7 +69,6 @@ export class ExoplanetDetectorApp {
             colsampleByTree: 0.8
         }));
 
-        // Random Forest Model
         this.models.set('randomforest', new RandomForestModel({
             nEstimators: 100,
             maxDepth: 10,
@@ -83,7 +77,6 @@ export class ExoplanetDetectorApp {
             bootstrap: true
         }));
 
-        // Ensemble Model
         const baseModels = [
             this.models.get('mlp-deep'),
             this.models.get('mlp-shallow'),
@@ -106,35 +99,44 @@ export class ExoplanetDetectorApp {
     async loadPCAParameters() {
         try {
             this.pcaParams = await ModelUtils.loadPCAParams();
-            console.log("The first This.pcaParams: ", this.pcaParams)
             if (this.pcaParams) {
                 console.log('PCA parameters loaded successfully');
                 this.pcaParams = ModelUtils.normalizePCAParams(this.pcaParams);
+                
+                if (!this.pcaParams.explained_variance_ratio || !Array.isArray(this.pcaParams.explained_variance_ratio)) {
+                    throw new Error('PCA parameters missing explained_variance_ratio array after normalization');
+                }
+                
+                if (this.pcaParams.explained_variance_ratio.length < 3) {
+                    throw new Error(`PCA parameters have only ${this.pcaParams.explained_variance_ratio.length} components, need at least 3`);
+                }
+                
                 this.updatePCADisplay();
             } else {
-                console.warn('PCA parameters not found, will generate mock parameters when data is loaded');
-                this.pcaParams = null; // La génération se fera dans processFile ou trainModels
+                console.warn('PCA parameters not found - will generate when dataset is loaded');
+                this.pcaParams = null;
+                this.showNotification('PCA parameters will be generated from your dataset', 'info');
             }
         } catch (error) {
-            console.error('Error loading PCA parameters:', error);
+            console.error('Error loading PCA parameters:', error.message);
             this.pcaParams = null;
+            this.showNotification(`PCA parameters unavailable: ${error.message}`, 'warning');
         }
     }
 
-   generateMockPCAParams(nFeatures, nComponents = 3) {
-    // Générer des paramètres PCA fictifs basés sur le nombre de caractéristiques
-    this.pcaParams = {
-        mean: Array(nFeatures).fill(0).map(() => Math.random() * 10), // Moyennes aléatoires
-        scale: Array(nFeatures).fill(0).map(() => Math.random() * 2 + 0.1), // Écarts-types
-        pca_components: Array(nComponents).fill(0).map(() => 
-            Array(nFeatures).fill(0).map(() => Math.random() * 0.2 - 0.1) // Matrice [nComponents, nFeatures]
-        ),
-        explained_variance_ratio: Array(nComponents).fill(0).map((_, i) => 1 / (i + 1) / (1 + 1/(i+1))), // Ratios normalisés
-        n_components: nComponents,
-        feature_names: Array(nFeatures).fill(0).map((_, i) => `feature_${i + 1}`)
-    };
-    console.log(`Generated mock PCA parameters for ${nFeatures} features and ${nComponents} components`);
-}
+    generateMockPCAParams(nFeatures, nComponents = 3) {
+        this.pcaParams = {
+            mean: Array(nFeatures).fill(0).map(() => Math.random() * 10),
+            scale: Array(nFeatures).fill(0).map(() => Math.random() * 2 + 0.1),
+            pca_components: Array(nComponents).fill(0).map(() => 
+                Array(nFeatures).fill(0).map(() => Math.random() * 0.2 - 0.1)
+            ),
+            explained_variance_ratio: Array(nComponents).fill(0).map((_, i) => 1 / (i + 1) / (1 + 1/(i+1))),
+            n_components: nComponents,
+            feature_names: Array(nFeatures).fill(0).map((_, i) => `feature_${i + 1}`)
+        };
+        console.log(`Generated mock PCA parameters for ${nFeatures} features and ${nComponents} components`);
+    }
 
     setActiveModel(modelName) {
         if (this.models.has(modelName)) {
@@ -149,7 +151,8 @@ export class ExoplanetDetectorApp {
     switchMode(mode) {
         this.currentMode = mode;
         document.querySelectorAll('.mode-btn').forEach(btn => btn.classList.remove('active'));
-        event.target.classList.add('active');
+        const targetBtn = document.querySelector(`.mode-btn[data-mode="${mode}"]`);
+        if (targetBtn) targetBtn.classList.add('active');
         
         const body = document.body;
         const tutorial = document.getElementById('tutorial');
@@ -165,80 +168,54 @@ export class ExoplanetDetectorApp {
         console.log(`Switched to ${mode} mode`);
     }
 
-   async trainModels(trainingData, valSplit = 0.2) {
-    if (this.isTraining) {
-        console.log('Training already in progress');
-        return;
-    }
-    this.isTraining = true;
-    this.updateStatus('Training models...', true);
-
-    try {
+    async trainModels(trainingData, valSplit = 0.2) {
+        if (this.isTraining) {
+            console.log('Training already in progress');
+            this.showNotification('Training already in progress');
+            return;
+        }
+        
         if (!trainingData || !trainingData.features || !trainingData.labels) {
-            throw new Error('Training data is invalid or missing');
+            this.showNotification('No training data available. Please upload a dataset first.', 'error');
+            this.updateStatus('No training data available. Please upload a dataset first.', false);
+            return;
         }
+        
+        this.isTraining = true;
+        this.updateStatus('Training models...', true);
 
-        const { features, labels } = trainingData;
+        try {
+            const { features, labels } = trainingData;
 
-        // Valider et nettoyer les caractéristiques
-        const cleanedFeatures = features.map(row => 
-            row.map((val, idx) => {
-                if (val == null || isNaN(val)) {
-                    return this.pcaParams?.mean?.[idx] || 0;
-                }
-                return Number(val);
-            })
-        );
+            // CRITICAL FIX: Data is already PCA-transformed from preprocessing
+            // Just convert to tensor directly
+            const pcaFeatures = tf.tensor2d(features);
+            console.log(`Training with ${features.length} samples, ${features[0].length} features`);
 
-        if (!cleanedFeatures.every(row => Array.isArray(row) && row.every(val => typeof val === 'number'))) {
-            throw new Error('Features must be a 2D array of numbers');
-        }
-
-        let pcaFeatures;
-        const inputFeatures = cleanedFeatures[0]?.length || 0;
-        const expectedFeatures = this.pcaParams?.mean?.length || inputFeatures;
-        const pcaComponents = this.pcaParams?.n_components || Math.min(3, inputFeatures);
-
-        console.log(`Input features: ${inputFeatures}, Expected raw: ${expectedFeatures}, PCA components: ${pcaComponents}`);
-
-        if (inputFeatures === pcaComponents || inputFeatures === expectedFeatures || inputFeatures <= 10) { // arbitrary value 😑😑
-            pcaFeatures = tf.tensor2d(cleanedFeatures);
-            console.log(`Training with pre-processed PCA data: ${cleanedFeatures.length} samples, ${inputFeatures} components`);
-        } else {
-            if (!this.pcaParams || inputFeatures !== expectedFeatures) {
-                console.warn(`Generating PCA parameters for ${inputFeatures} features`);
-                this.generateMockPCAParams(inputFeatures, Math.min(3, inputFeatures));
+            let metrics;
+            if (this.activeModel instanceof EnsembleModel) {
+                const results = await this.activeModel.fit(pcaFeatures, labels, valSplit);
+                console.log('Ensemble training results:', results);
+                metrics = await this.activeModel.evaluate(pcaFeatures, labels);
+            } else {
+                await this.activeModel.fit(pcaFeatures, labels, valSplit);
+                metrics = await this.activeModel.evaluate(pcaFeatures, labels);
             }
-            pcaFeatures = ModelUtils.applyPCA(cleanedFeatures, this.pcaParams);
-            this.dataLoadedFromPCA = true;
-            console.log(`Training with ${cleanedFeatures.length} samples, ${pcaFeatures.shape[1]} PCA features`);
+
+            this.updateMetricsDisplay(metrics);
+            this.updateStatus('Training completed successfully');
+            await this.updateTrainingVisualizations(pcaFeatures, labels);
+
+            pcaFeatures.dispose();
+
+        } catch (error) {
+            console.error('Training failed:', error);
+            this.updateStatus('Training failed: ' + error.message);
+            this.showNotification('Model training failed: ' + error.message, 'error');
+        } finally {
+            this.isTraining = false;
         }
-
-        // Entraîner le modèle actif
-        let metrics;
-        if (this.activeModel instanceof EnsembleModel) {
-            const results = await this.activeModel.fit(pcaFeatures, labels, valSplit);
-            console.log('Ensemble training results:', results);
-            metrics = await this.activeModel.evaluate(pcaFeatures, labels);
-        } else {
-            await this.activeModel.fit(pcaFeatures, labels, valSplit);
-            metrics = await this.activeModel.evaluate(pcaFeatures, labels);
-        }
-
-        this.updateMetricsDisplay(metrics);
-        this.updateStatus('Training completed successfully');
-        await this.updateTrainingVisualizations(pcaFeatures, labels);
-
-        pcaFeatures.dispose();
-
-    } catch (error) {
-        console.error('Training failed:', error);
-        this.updateStatus('Training failed: ' + error.message);
-        this.showError('Model training failed: ' + error.message);
-    } finally {
-        this.isTraining = false;
     }
-}
 
     async batchPredict(featuresArray) {
         if (!this.activeModel || !this.activeModel.trained) {
@@ -248,36 +225,48 @@ export class ExoplanetDetectorApp {
         try {
             this.updateStatus('Running batch prediction...', true);
             
-            // Apply PCA transformation
-            let pcaFeatures;
-            if (this.dataLoadedFromPCA) {
-                pcaFeatures = tf.tensor2d(featuresArray);
-            } else {
-                pcaFeatures = ModelUtils.applyPCA(featuresArray, this.pcaParams);
+            if (!Array.isArray(featuresArray) || featuresArray.length === 0) {
+                throw new Error('featuresArray must be a non-empty array');
             }
+
+            // Features are already PCA-transformed
+            const pcaFeatures = tf.tensor2d(featuresArray);
             
-            // Get predictions
             const probabilities = await this.activeModel.predict(pcaFeatures);
             const classes = await this.activeModel.predictClasses(pcaFeatures);
             
             const probData = await probabilities.data();
             const classData = await classes.data();
             
-            // Format results
+            // Binary classification: only FALSE POSITIVE (0) or CONFIRMED (2)
             const results = [];
+            const nClasses = probabilities.shape[1] || 3;
+            
             for (let i = 0; i < featuresArray.length; i++) {
-                const startIdx = i * 3; // 3 classes: Confirmed, Candidate, FalseP
+                const startIdx = i * nClasses;
+                const probs = Array.from(probData.slice(startIdx, startIdx + nClasses));
+                
+                // For binary decision: compare FALSE POSITIVE vs CONFIRMED probabilities
+                const fpProb = probs[0] || 0;
+                const confirmedProb = probs[2] || 0;
+                
+                // Determine classification (skip candidate class)
+                const classIdx = classData[i];
+                const isFalsePositive = (classIdx === 0) || (fpProb > confirmedProb);
+                
                 results.push({
                     features: featuresArray[i],
                     result: {
-                        classification: this.getClassificationLabel(classData[i]),
-                        confidence: Math.max(...probData.slice(startIdx, startIdx + 3)),
-                        probabilities: Array.from(probData.slice(startIdx, startIdx + 3))
+                        classification: isFalsePositive ? 'FALSE POSITIVE' : 'CONFIRMED',
+                        confidence: Math.max(fpProb, confirmedProb),
+                        probabilities: {
+                            falsePositive: fpProb,
+                            confirmed: confirmedProb
+                        }
                     }
                 });
             }
             
-            // Clean up tensors
             pcaFeatures.dispose();
             probabilities.dispose();
             classes.dispose();
@@ -293,127 +282,109 @@ export class ExoplanetDetectorApp {
     }
 
     getClassificationLabel(classIndex) {
-        const labels = ['FALSE POSITIVE', 'CANDIDATE', 'CONFIRMED'];
-        return labels[classIndex] || 'UNKNOWN';
+        // Binary classification: 0 = FALSE POSITIVE, 2 = CONFIRMED
+        // We skip index 1 (CANDIDATE) as it's not a valid prediction
+        if (classIndex === 0) return 'FALSE POSITIVE';
+        if (classIndex === 2) return 'CONFIRMED';
+        // Fallback for any unexpected indices - treat as binary
+        return classIndex < 1 ? 'FALSE POSITIVE' : 'CONFIRMED';
     }
 
-    async updateHyperparameters(modelName, params) {
-        const model = this.models.get(modelName);
-        if (model) {
-            model.updateHyperparameters(params);
-            console.log(`Updated hyperparameters for ${modelName}:`, params);
-            
-            // Update display
-            this.updateModelConfigDisplay(modelName, model.config);
+    async processFile(file) {
+        try {
+            const extension = file.name.split('.').pop().toLowerCase();
+            let data;
+
+            if (extension === 'csv') {
+                const rawData = await this.dataLoader.loadCSV(file);
+                if (!rawData.data || rawData.data.length === 0) {
+                    throw new Error('No valid data rows loaded from CSV');
+                }
+                
+                // CRITICAL FIX: Apply PCA during preprocessing
+                data = await this.dataProcessor.preprocessData(rawData, true);
+                
+                if (!data.features || !Array.isArray(data.features) || data.features.length === 0 || !data.features[0]) {
+                    throw new Error('Invalid preprocessed data: features array is missing or empty');
+                }
+                
+                // Store PCA params from preprocessing
+                if (this.dataProcessor.pcaModel) {
+                    this.pcaParams = this.dataProcessor.exportParams();
+                    this.updatePCADisplay();
+                }
+                
+                const splitter = new TrainTestSplit(0.2, 42);
+                const splits = splitter.split(data.features, data.labels);
+                
+                this.dataLoadedFromPCA = true; // Data is now PCA-transformed
+                console.log(`Loaded CSV with ${data.features[0].length} PCA components`);
+                console.log(`Split: ${splits.train.features.length} train, ${splits.test.features.length} test, ${splits.candidates.features.length} candidates`);
+                
+                this.trainingData = splits.train;
+                this.testData = splits.test;
+                this.candidatesData = splits.candidates;
+                this.splitStats = splits.stats;
+                
+                this.updateStatus(`Data loaded: ${splits.stats.train.total} train, ${splits.stats.test.total} test, ${splits.stats.candidates} candidates`);
+                this.updateSplitDisplay(splits.stats);
+                
+                if (this.visualizer) {
+                    this.visualizer.generateSplitVisualization(splits.stats);
+                }
+                
+                return splits;
+            } else if (extension === 'npy' || extension === 'json') {
+                const pcaData = await this.dataLoader.loadPCAData([file]);
+                if (pcaData.pca_params) {
+                    this.pcaParams = pcaData.pca_params.data;
+                    console.log('Loaded PCA parameters');
+                    return pcaData.pca_params;
+                }
+                
+                this.dataLoadedFromPCA = true;
+                this.trainingData = pcaData.train;
+                this.testData = pcaData.test;
+                this.candidatesData = pcaData.candidates;
+                
+                const inputFeatures = pcaData.train.features[0]?.length || 0;
+                console.log(`Loaded PCA data with ${inputFeatures} components`);
+                
+                if (!this.pcaParams) {
+                    await this.loadPCAParameters();
+                }
+                
+                const pcaComponents = this.pcaParams?.n_components || Math.min(3, inputFeatures);
+                if (inputFeatures !== pcaComponents) {
+                    throw new Error(
+                        `PCA data dimension mismatch: input has ${inputFeatures} components, expected ${pcaComponents}`
+                    );
+                }
+                
+                this.updateStatus(`PCA data loaded: ${pcaData.train.features.length} train samples`);
+                return pcaData;
+            } else {
+                throw new Error(`Unsupported file format: ${extension}`);
+            }
+        } catch (error) {
+            console.error('Error processing file:', error);
+            this.showNotification(`Failed to process file: ${error.message}`, 'error');
+            throw error;
         }
     }
-
-    async updatePCAComponents(numComponents) {  
-        if (this.pcaParams && numComponents > 0 && numComponents <= this.pcaParams.feature_names.length) {
-            this.pcaParams.n_components = numComponents;
-            console.log(`PCA components updated to ${numComponents}`);
-            this.updatePCADisplay();
-            
-            // If training data exists, re-train models with new PCA settings
-            if (this.trainingData && !this.dataLoadedFromPCA) {
-                await this.trainModels(this.trainingData);
-            }
-        } else {
-            console.warn('Invalid number of PCA components:', numComponents);
-        }   
-    }
-
-   async processFile(file) {
-    try {
-        const extension = file.name.split('.').pop().toLowerCase();
-        let data;
-
-        if (extension === 'csv') {
-            const rawData = await this.dataLoader.loadCSV(file);
-            if (!rawData.data || rawData.data.length === 0) {
-                throw new Error('No valid data rows loaded from CSV');
-            }
-            data = await this.dataProcessor.preprocessData(rawData);
-            if (!data.features || !Array.isArray(data.features) || data.features.length === 0 || !data.features[0]) {
-                throw new Error('Invalid preprocessed data: features array is missing or empty');
-            }
-            this.dataLoadedFromPCA = false; // Données brutes
-            console.log(`Loaded CSV with ${data.features[0].length} features`);
-        } else if (extension === 'npy' || extension === 'json') {
-            const pcaData = await this.dataLoader.loadPCAData([file]);
-            if (pcaData.pca_params) {
-                this.pcaParams = pcaData.pca_params.data;
-                console.log('Loaded PCA parameters');
-                return pcaData.pca_params; // Return early for PCA params
-            }
-            data = {
-                features: pcaData.X_train_pca?.features || pcaData.X_train_pca?.data,
-                labels: pcaData.y_train?.labels || [],
-                featureNames: pcaData.X_train_pca?.featureNames || [],
-                format: pcaData.X_train_pca?.format || extension,
-                filename: file.name,
-                size: file.size,
-                rowCount: pcaData.X_train_pca?.rowCount || pcaData.X_train_pca?.data?.length
-            };
-            if (!data.features || !Array.isArray(data.features) || data.features.length === 0 || !data.features[0]) {
-                throw new Error('Invalid PCA data: features array is missing or empty');
-            }
-            this.dataLoadedFromPCA = true; // Données transformées par PCA
-            console.log(`Loaded PCA data with ${data.features[0].length} components`);
-        } else {
-            throw new Error('Unsupported file format');
-        }
-
-        // Vérifier la compatibilité des dimensions
-        const inputFeatures = data.features[0]?.length || 0;
-        if (inputFeatures === 0) {
-            throw new Error('No features detected in the loaded data');
-        }
-
-        // Charger ou générer les paramètres PCA
-        if (!this.pcaParams) {
-            await this.loadPCAParameters();
-        }
-
-        const expectedFeatures = this.pcaParams?.mean?.length || inputFeatures;
-        const pcaComponents = this.pcaParams?.n_components || Math.min(3, inputFeatures);
-
-        if (inputFeatures !== expectedFeatures) {
-            console.warn(`Raw data dimension mismatch: input has ${inputFeatures} features, expected ${expectedFeatures}`);
-            console.log(`Generating PCA parameters for ${inputFeatures} features`);
-            this.generateMockPCAParams(inputFeatures, Math.min(3, inputFeatures));
-            this.pcaParams.feature_names = data.featureNames || Array(inputFeatures).fill(0).map((_, i) => `feature_${i + 1}`);
-        }
-
-        this.trainingData = {
-            features: data.features,
-            labels: data.labels || [],
-            featureNames: data.featureNames || []
-        };
-        this.dataLoadedFromPCA = true;
-        this.updateStatus('Data loaded successfully');
-        return this.trainingData;
-    } catch (error) {
-        console.error('Error processing file:', error);
-        this.showError('Failed to process file: ' + error.message);
-        throw error;
-    }
-}
 
     async loadPCAData(files) {
         try {
-            // Load pre-processed PCA data using DataLoader
             const results = await this.dataLoader.loadPCADataset(files);
             
             if (results.errors.length > 0) {
                 console.warn('Some files failed to load:', results.errors);
             }
             
-            // Extract training data
             const features = results.X_train_pca?.data || [];
             const labels = results.y_train?.data || [];
             
-            console.log("PCA Params: ",results.pca_params)
+            console.log("PCA Params: ", results.pca_params);
             if (results.pca_params) {
                 this.pcaParams = results.pca_params.data;
                 this.updatePCADisplay();
@@ -422,55 +393,24 @@ export class ExoplanetDetectorApp {
             this.dataLoadedFromPCA = true;
             
             return {
-                features: this.reshapeNPYData(features, results.X_train_pca?.shape),
-                labels: labels,
+                train: {
+                    features: this.reshapeNPYData(features, results.X_train_pca?.shape),
+                    labels: labels
+                },
+                test: results.X_test_pca ? {
+                    features: this.reshapeNPYData(results.X_test_pca.data, results.X_test_pca.shape),
+                    labels: results.y_test?.data || []
+                } : null,
+                candidates: results.X_candidates_pca ? {
+                    features: this.reshapeNPYData(results.X_candidates_pca.data, results.X_candidates_pca.shape),
+                    labels: results.y_candidates?.data || []
+                } : null,
                 featureNames: Array.from({length: this.pcaParams?.n_components || 3}, (_, i) => `PC${i+1}`)
             };
             
         } catch (error) {
             console.error('PCA data loading failed:', error);
             throw new Error('Failed to load PCA data: ' + error.message);
-        }
-    }
-
-async processRawCSV(file) {
-        try {
-            // Load CSV using DataLoader
-            const csvData = await this.dataLoader.loadCSV(file);
-            
-            console.log('CSV loaded, row count:', csvData.rowCount);
-            console.log('Sample data:', csvData.data.slice(0, 2));
-            
-            // Process using DataProcessor
-            const processedData = await this.dataProcessor.preprocessData(csvData);
-            
-            // Apply PCA transformation
-            const pcaFeatures = await this.dataProcessor.fitTransform(processedData.features);
-            
-            // Update PCA parameters from processor and normalize format
-            const rawParams = this.dataProcessor.exportParams();
-            this.pcaParams = ModelUtils.normalizePCAParams(rawParams);
-            
-            console.log('PCA parameters normalized:', {
-                mean: this.pcaParams.mean?.length,
-                scale: this.pcaParams.scale?.length,
-                components: this.pcaParams.pca_components?.length,
-                n_components: this.pcaParams.n_components
-            });
-            
-            this.updatePCADisplay();
-            
-            this.dataLoadedFromPCA = true;
-            
-            return {
-                features: pcaFeatures,
-                labels: processedData.labels,
-                featureNames: processedData.featureNames
-            };
-            
-        } catch (error) {
-            console.error('CSV processing failed:', error);
-            throw new Error('Failed to process CSV: ' + error.message);
         }
     }
 
@@ -488,7 +428,6 @@ async processRawCSV(file) {
         return reshaped;
     }
 
-    // UI Update Methods
     updateStatus(message, processing = false) {
         const statusElement = document.getElementById('status');
         if (statusElement) {
@@ -514,13 +453,31 @@ async processRawCSV(file) {
     }
 
     updatePCADisplay() {
-        if (!this.pcaParams) return;
-        
         const varianceElement = document.getElementById('variance-explained');
-        if (varianceElement) {
-            console.log("This.pcaParams: ", this.pcaParams)
-            const ratios = this.pcaParams.explained_variance_ratio;
-            
+        if (!varianceElement) {
+            console.warn('Variance explained element not found in DOM');
+            return;
+        }
+        
+        if (!this.pcaParams) {
+            varianceElement.innerHTML = '<small style="color: #ffa500;">PCA parameters not loaded</small>';
+            return;
+        }
+        
+        if (!this.pcaParams.explained_variance_ratio || !Array.isArray(this.pcaParams.explained_variance_ratio)) {
+            varianceElement.innerHTML = '<small style="color: #ff0000;">Invalid PCA variance data</small>';
+            console.error('PCA params missing explained_variance_ratio array');
+            return;
+        }
+        
+        const ratios = this.pcaParams.explained_variance_ratio;
+        
+        if (ratios.length < 3) {
+            varianceElement.innerHTML = '<small style="color: #ffa500;">Insufficient PCA components (need at least 3)</small>';
+            return;
+        }
+        
+        try {
             const cumulative = ratios.reduce((acc, val, idx) => {
                 acc.push(idx === 0 ? val : acc[idx-1] + val);
                 return acc;
@@ -531,73 +488,224 @@ async processRawCSV(file) {
                 `PC2: ${(ratios[1] * 100).toFixed(1)}%, ` +
                 `PC3: ${(ratios[2] * 100).toFixed(1)}%<br>` +
                 `<small>Cumulative: ${(cumulative[2] * 100).toFixed(1)}%</small>`;
+        } catch (error) {
+            varianceElement.innerHTML = '<small style="color: #ff0000;">Error displaying PCA variance</small>';
+            console.error('Error in updatePCADisplay:', error);
         }
     }
 
+    updateSplitDisplay(stats) {
+        let splitElement = document.getElementById('split-stats');
+        if (!splitElement) {
+            const container = document.querySelector('.data-info') || document.querySelector('.container');
+            if (container) {
+                splitElement = document.createElement('div');
+                splitElement.id = 'split-stats';
+                splitElement.className = 'panel';
+                container.appendChild(splitElement);
+            } else {
+                return;
+            }
+        }
+        
+        splitElement.innerHTML = `
+            <h3>Data Split Summary</h3>
+            <div class="metrics">
+                <div class="metric">
+                    <div class="metric-value" style="color: #00d4ff">${stats.train.total}</div>
+                    <div class="metric-label">Training</div>
+                    <div class="metric-detail">
+                        <small>Confirmed: ${stats.train.confirmed} | FP: ${stats.train.falsePositive}</small>
+                    </div>
+                </div>
+                <div class="metric">
+                    <div class="metric-value" style="color: #00ff00">${stats.test.total}</div>
+                    <div class="metric-label">Testing</div>
+                    <div class="metric-detail">
+                        <small>Confirmed: ${stats.test.confirmed} | FP: ${stats.test.falsePositive}</small>
+                    </div>
+                </div>
+                <div class="metric">
+                    <div class="metric-value" style="color: #ffa500">${stats.candidates}</div>
+                    <div class="metric-label">Candidates</div>
+                    <div class="metric-detail">
+                        <small>For Prediction</small>
+                    </div>
+                </div>
+            </div>
+        `;
+    }
+
     updateModelDisplay(modelName) {
-        // Update UI to reflect active model
         const modelButtons = document.querySelectorAll('.model-btn');
         modelButtons.forEach(btn => {
             btn.classList.toggle('active', btn.dataset.model === modelName);
         });
     }
 
-    updateModelConfigDisplay(modelName, config) {
-        this.updateModelDisplay(modelName);
-    }
-
-    showError(message) {
-        // Create or update error display
-        let errorDiv = document.getElementById('error-display');
-        if (!errorDiv) {
-            errorDiv = document.createElement('div');
-            errorDiv.id = 'error-display';
-            errorDiv.className = 'error-message';
-            document.querySelector('.container').prepend(errorDiv);
+    showNotification(message, type = 'info') {
+        let notificationDiv = document.getElementById('notification-display');
+        if (!notificationDiv) {
+            notificationDiv = document.createElement('div');
+            notificationDiv.id = 'notification-display';
+            notificationDiv.className = 'notification-container';
+            const container = document.querySelector('.container');
+            if (container) {
+                container.prepend(notificationDiv);
+            } else {
+                document.body.prepend(notificationDiv);
+            }
         }
         
-        errorDiv.innerHTML = `
-            <div class="error-content">
-                <span>❌ Error: ${message}</span>
+        const icons = { error: '✗', warning: '⚠', info: 'ℹ', success: '✓' };
+        const colors = { error: '#ff4444', warning: '#ffa500', info: '#4444ff', success: '#00ff00' };
+        
+        notificationDiv.innerHTML = `
+            <div class="notification-content" style="border-left: 4px solid ${colors[type]}">
+                <span>${icons[type]} ${message}</span>
                 <button onclick="this.parentElement.parentElement.remove()">×</button>
             </div>
         `;
         
-        // Auto-hide after 10 seconds
+        const duration = type === 'error' ? 10000 : type === 'warning' ? 7000 : 5000;
         setTimeout(() => {
-            if (errorDiv.parentElement) {
-                errorDiv.remove();
+            if (notificationDiv.parentElement) {
+                notificationDiv.remove();
             }
-        }, 10000);
+        }, duration);
+    }
+
+    showError(message) {
+        this.showNotification(message, 'error');
     }
 
     async updateTrainingVisualizations(features, labels) {
-        // Update various charts and visualizations
         if (this.visualizer) {
             await this.visualizer.updatePCAPlot(features, labels);
-            await this.visualizer.updateFeatureImportance(this.activeModel);
+            
+            if (this.trainingData && this.testData) {
+                await this.visualizer.updatePCAPlotBySplit(
+                    this.trainingData,
+                    this.testData,
+                    this.candidatesData
+                );
+            }
+            
+            await this.visualizer.updateFeatureImportance(this.activeModel, this.pcaParams?.n_components);
             await this.visualizer.updateModelComparison(this.models);
+            
+            if (this.splitStats) {
+                this.visualizer.generateSplitVisualization(this.splitStats);
+            }
         }
     }
 
     setupEventListeners() {
-        // Set up global event listeners
         window.switchMode = (mode) => this.switchMode(mode);
         window.setActiveModel = (modelName) => this.setActiveModel(modelName);
         window.trainModels = () => this.trainModels(this.trainingData);
+        window.evaluateOnTest = () => this.evaluateOnTestSet();
         window.predictSingle = () => this.handleSinglePrediction();
         window.batchPredict = () => this.handleBatchPrediction();
         window.handleFileUpload = (event) => this.handleFileUpload(event);
         window.updatePCAComponents = (num) => this.updatePCAComponents(num);
         window.updateHyperparameter = (param, value, model) => 
             this.updateHyperparameters(model || 'mlp-deep', { [param]: value });
+        window.crossValidate = (k = 5) => this.crossValidate(k);
+    }
+
+    async evaluateOnTestSet() {
+        if (!this.activeModel || !this.activeModel.trained) {
+            this.showNotification('Please train a model first', 'warning');
+            return;
+        }
+        
+        if (!this.testData || this.testData.features.length === 0) {
+            this.showNotification('No test data available', 'warning');
+            return;
+        }
+        
+        try {
+            this.updateStatus('Evaluating on test set...', true);
+            
+            // Data is already PCA-transformed
+            const testFeatures = tf.tensor2d(this.testData.features);
+            
+            const metrics = await this.activeModel.evaluate(testFeatures, this.testData.labels);
+            testFeatures.dispose();
+            
+            this.displayTestResults(metrics);
+            this.updateStatus('Test evaluation completed');
+            this.showNotification('Test evaluation completed successfully', 'success');
+            
+        } catch (error) {
+            console.error('Test evaluation failed:', error);
+            this.updateStatus('Test evaluation failed');
+            this.showNotification(`Test evaluation failed: ${error.message}`, 'error');
+        }
+    }
+
+    displayTestResults(metrics) {
+        let resultsDiv = document.getElementById('test-results');
+        if (!resultsDiv) {
+            const container = document.querySelector('.metrics-panel') || document.querySelector('.container');
+            if (container) {
+                resultsDiv = document.createElement('div');
+                resultsDiv.id = 'test-results';
+                resultsDiv.className = 'panel';
+                container.appendChild(resultsDiv);
+            } else {
+                return;
+            }
+        }
+        
+        resultsDiv.innerHTML = `
+            <h3>Test Set Performance (${this.activeModel.name})</h3>
+            <div class="metrics">
+                <div class="metric">
+                    <div class="metric-value">${(metrics.accuracy * 100).toFixed(1)}%</div>
+                    <div class="metric-label">Test Accuracy</div>
+                </div>
+                <div class="metric">
+                    <div class="metric-value">${(metrics.precision * 100).toFixed(1)}%</div>
+                    <div class="metric-label">Test Precision</div>
+                </div>
+                <div class="metric">
+                    <div class="metric-value">${(metrics.recall * 100).toFixed(1)}%</div>
+                    <div class="metric-label">Test Recall</div>
+                </div>
+                <div class="metric">
+                    <div class="metric-value">${(metrics.f1score * 100).toFixed(1)}%</div>
+                    <div class="metric-label">Test F1 Score</div>
+                </div>
+            </div>
+            <p><small>Test metrics show how well the model generalizes to unseen data.</small></p>
+        `;
+    }
+
+    extractFeaturesFromForm() {
+        const ids = ['period', 'duration', 'depth', 'stellar_radius', 'stellar_temp', 'impact'];
+        const features = [];
+        
+        ids.forEach(id => {
+            const el = document.getElementById(id);
+            if (!el) {
+                features.push(null);
+            } else {
+                const v = el.value;
+                const n = v === '' || v === null ? null : Number(v);
+                features.push(Number.isNaN(n) ? null : n);
+            }
+        });
+        
+        return features;
     }
 
     async handleSinglePrediction() {
         const features = this.extractFeaturesFromForm();
         
         if (!this.validateFeatures(features)) {
-            this.showError('Please enter at least orbital period, transit duration, or transit depth.');
+            this.showNotification('Please enter at least orbital period, transit duration, or transit depth.', 'error');
             return;
         }
         
@@ -605,18 +713,27 @@ async processRawCSV(file) {
             const result = await this.predictSingle(features);
             this.displaySingleResult(result);
         } catch (error) {
-            this.showError(error.message);
+            this.showNotification(error.message, 'error');
         }
     }
 
     async handleBatchPrediction() {
-        if (!this.trainingData || this.trainingData.features.length === 0) {
-            console.error('Please Upload The Dataset First:', error);
-            this.showError('Please Upload The Dataset First: ' + error.message);
-       
-        } else {
-            const results = await this.batchPredict(this.trainingData.features.slice(0, 50));
-            this.displayBatchResults(results);
+        if (!this.activeModel || !this.activeModel.trained) {
+            this.showNotification('Please train a model first', 'warning');
+            return;
+        }
+        
+        if (!this.candidatesData || this.candidatesData.features.length === 0) {
+            this.showNotification('No candidate data available. Please upload a dataset with candidates.', 'warning');
+            return;
+        }
+        
+        try {
+            const results = await this.batchPredict(this.candidatesData.features);
+            this.displayBatchResults(results, 'candidates');
+            this.showNotification(`Predicted ${results.length} candidates successfully`, 'success');
+        } catch (error) {
+            this.showNotification(`Batch prediction failed: ${error.message}`, 'error');
         }
     }
 
@@ -629,83 +746,383 @@ async processRawCSV(file) {
                 await this.processFile(file);
             }
         } catch (error) {
-            this.showError('File upload failed: ' + error.message);
+            this.showNotification('File upload failed: ' + error.message, 'error');
         }
     }
 
-    extractFeaturesFromForm() {
-        return {
-            period: parseFloat(document.getElementById('period')?.value) || null,
-            duration: parseFloat(document.getElementById('duration')?.value) || null,
-            depth: parseFloat(document.getElementById('depth')?.value) || null,
-            stellar_radius: parseFloat(document.getElementById('stellar_radius')?.value) || null,
-            stellar_temp: parseFloat(document.getElementById('stellar_temp')?.value) || null,
-            impact: parseFloat(document.getElementById('impact')?.value) || null
-        };
-    }
-
-    validateFeatures(features) {
-        return features.period || features.duration || features.depth;
-    }
-
-    displaySingleResult(result) {
-        const resultsDiv = document.getElementById('results');
-        if (!resultsDiv) return;
-        
-        const className = result.classification === 'CONFIRMED' ? 'confirmed' : 
-                         result.classification === 'CANDIDATE' ? 'candidate' : 'false-positive';
-        
-        resultsDiv.innerHTML = `
-            <div class="panel">
-                <h3>🎯 Prediction Result (${this.activeModel.name})</h3>
-                <div class="prediction-result ${className}">
-                    <h2>${result.classification}</h2>
-                    <p>Confidence: ${(result.confidence * 100).toFixed(1)}%</p>
-                    <div class="probability-breakdown">
-                        <small>
-                            False Positive: ${(result.probabilities[0] * 100).toFixed(1)}% | 
-                            Candidate: ${(result.probabilities[1] * 100).toFixed(1)}% | 
-                            Confirmed: ${(result.probabilities[2] * 100).toFixed(1)}%
-                        </small>
-                    </div>
-                </div>
-                <div class="metrics">
-                    <div class="metric"><div class="metric-value">${result.features.period?.toFixed(2) || 'N/A'}</div><div class="metric-label">Period (days)</div></div>
-                    <div class="metric"><div class="metric-value">${result.features.duration?.toFixed(2) || 'N/A'}</div><div class="metric-label">Duration (hrs)</div></div>
-                    <div class="metric"><div class="metric-value">${result.features.depth?.toFixed(0) || 'N/A'}</div><div class="metric-label">Depth (ppm)</div></div>
-                    <div class="metric"><div class="metric-value">${result.features.stellar_radius?.toFixed(2) || 'N/A'}</div><div class="metric-label">Stellar R☉</div></div>
-                </div>
-            </div>
-        `;
-    }
-
-    displayBatchResults(results) {
+    displayBatchResults(results, type = 'test') {
         const confirmed = results.filter(r => r.result.classification === 'CONFIRMED').length;
-        const candidates = results.filter(r => r.result.classification === 'CANDIDATE').length;
         const falsePos = results.filter(r => r.result.classification === 'FALSE POSITIVE').length;
         
         const resultsDiv = document.getElementById('results');
         if (!resultsDiv) return;
         
+        const typeLabel = type === 'candidates' ? 'Candidate Classification Results' : 'Batch Analysis Results';
+        
         resultsDiv.innerHTML = `
             <div class="panel">
-                <h3>📊 Batch Analysis Results (${this.activeModel.name})</h3>
+                <h3>${typeLabel} (${this.activeModel.name})</h3>
                 <div class="metrics">
-                    <div class="metric"><div class="metric-value" style="color: #00ff00">${confirmed}</div><div class="metric-label">Confirmed</div></div>
-                    <div class="metric"><div class="metric-value" style="color: #ffa500">${candidates}</div><div class="metric-label">Candidates</div></div>
-                    <div class="metric"><div class="metric-value" style="color: #ff0000">${falsePos}</div><div class="metric-label">False Positives</div></div>
-                    <div class="metric"><div class="metric-value">${results.length}</div><div class="metric-label">Total Objects</div></div>
+                    <div class="metric">
+                        <div class="metric-value" style="color: #00ff00">${confirmed}</div>
+                        <div class="metric-label">Confirmed Exoplanets</div>
+                    </div>
+                    <div class="metric">
+                        <div class="metric-value" style="color: #ff0000">${falsePos}</div>
+                        <div class="metric-label">False Positives</div>
+                    </div>
+                    <div class="metric">
+                        <div class="metric-value">${results.length}</div>
+                        <div class="metric-label">Total Objects</div>
+                    </div>
+                    <div class="metric">
+                        <div class="metric-value">${((confirmed / results.length) * 100).toFixed(1)}%</div>
+                        <div class="metric-label">Confirmation Rate</div>
+                    </div>
                 </div>
                 <div class="visualization" id="batch-results-chart"></div>
+                ${type === 'candidates' ? '<p><small>Binary classification: candidates are predicted as either <strong>Confirmed Exoplanets</strong> or <strong>False Positives</strong>.</small></p>' : ''}
             </div>
         `;
         
-        // Update batch chart
         this.visualizer.generateBatchChart(results);
     }
 
+    updateHyperparameters(modelName = 'mlp-deep', newConfig = {}) {
+        try {
+            if (!this.models.has(modelName)) {
+                this.showNotification(`Model ${modelName} not found`, 'error');
+                return;
+            }
+            const model = this.models.get(modelName);
+
+            if (typeof model.updateHyperparameters === 'function') {
+                model.updateHyperparameters(newConfig);
+            } else if (typeof model.updateConfig === 'function') {
+                model.updateConfig({ ...model.config, ...newConfig });
+            } else {
+                model.config = { ...(model.config || {}), ...newConfig };
+            }
+
+            const mapping = {
+                'n_estimators': ['n-estimators', 'n-estimators-value'],
+                'learning_rate': ['learning-rate', 'learning-rate-value'],
+                'hidden_layers': ['hidden-layers', 'hidden-layers-value'],
+                'dropout': ['dropout', 'dropout-value']
+            };
+
+            Object.entries(newConfig).forEach(([k, v]) => {
+                if (mapping[k]) {
+                    const [inputId, spanId] = mapping[k];
+                    const el = document.getElementById(inputId);
+                    const span = document.getElementById(spanId);
+                    if (el) el.value = v;
+                    if (span) span.textContent = v;
+                }
+            });
+
+            const significant = ['nEstimators', 'maxDepth', 'minSamplesSplit', 'maxFeatures', 'bootstrap', 'hiddenLayers', 'learningRate'];
+            const hasSignificant = Object.keys(newConfig).some(k => significant.includes(k) || significant.includes(this._toCamelCase(k)));
+
+            if (hasSignificant) {
+                if (model.trained) {
+                    model.trained = false;
+                }
+                if (typeof model.dispose === 'function') {
+                    try { model.dispose(); } catch (e) { /* ignore */ }
+                }
+                this.showNotification(`Updated hyperparameters for ${modelName}. Retraining is recommended.`, 'info');
+            } else {
+                this.showNotification(`Updated hyperparameters for ${modelName}`, 'success');
+            }
+
+            this.updateModelDisplay(modelName);
+        } catch (error) {
+            console.error('updateHyperparameters error:', error);
+            this.showNotification('Failed to update hyperparameters: ' + error.message, 'error');
+        }
+    }
+
+    _toCamelCase(s) {
+        return s.replace(/_([a-z])/g, (m, p1) => p1.toUpperCase());
+    }
+
+    async updatePCAComponents(num) {
+        try {
+            const n = Number(num);
+            const span = document.getElementById('pca-components-value');
+            if (span) span.textContent = `${n}`;
+
+            // Update processor configuration
+            this.dataProcessor.nComponents = n;
+
+            if (!this.pcaParams) {
+                this.showNotification('PCA parameters will be applied when data is loaded.', 'info');
+                return;
+            }
+
+            this.pcaParams.n_components = n;
+            this.updatePCADisplay();
+
+            // If we have training data, refresh visualizations
+            if (this.visualizer && this.trainingData) {
+                try {
+                    await this.visualizer.updatePCAPlotBySplit(
+                        this.trainingData,
+                        this.testData,
+                        this.candidatesData
+                    );
+                } catch (err) {
+                    console.warn('PCA visualization refresh failed:', err);
+                }
+            }
+
+            this.showNotification(`PCA components set to ${n}. Reload data to apply.`, 'success');
+        } catch (error) {
+            console.error('updatePCAComponents error:', error);
+            this.showNotification('Failed to update PCA components: ' + error.message, 'error');
+        }
+    }
+    
+    validateFeatures(features) {
+        if (!Array.isArray(features)) return false;
+        const core = [features[0], features[1], features[2]];
+        return core.some(v => v !== null && v !== undefined && !Number.isNaN(Number(v)));
+    }
+
+    async predictSingle(features = null) {
+        try {
+            if (!features) features = this.extractFeaturesFromForm();
+
+            if (!this.validateFeatures(features)) {
+                throw new Error('Please enter at least orbital period, transit duration, or transit depth.');
+            }
+
+            if (!this.activeModel || !this.activeModel.trained) {
+                throw new Error('No trained model available for prediction. Please train a model first.');
+            }
+
+            const inputArr = [features];
+            
+            if (this.dataProcessor.scaler && this.dataProcessor.pcaModel) {
+                const transformed = this.dataProcessor.transform(inputArr);
+                const inputTensor = tf.tensor2d(transformed);
+                
+                const probabilities = await this.activeModel.predict(inputTensor);
+                const classes = await this.activeModel.predictClasses(inputTensor);
+
+                const probData = await probabilities.data();
+                const classData = await classes.data();
+
+                const nClasses = probabilities.shape[1] || 3;
+                const probs = Array.from(probData).slice(0, nClasses);
+                
+                // Binary classification: FALSE POSITIVE vs CONFIRMED
+                const fpProb = probs[0] || 0;
+                const confirmedProb = probs[2] || 0;
+                const classIdx = classData[0];
+                
+                const isFalsePositive = (classIdx === 0) || (fpProb > confirmedProb);
+                const confidence = Math.max(fpProb, confirmedProb);
+
+                inputTensor.dispose();
+                probabilities.dispose();
+                classes.dispose();
+
+                return {
+                    features,
+                    result: {
+                        classification: isFalsePositive ? 'FALSE POSITIVE' : 'CONFIRMED',
+                        confidence,
+                        probabilities: {
+                            falsePositive: fpProb,
+                            confirmed: confirmedProb
+                        }
+                    }
+                };
+            } else {
+                throw new Error('Model not properly trained. Please train the model with a dataset first.');
+            }
+        } catch (error) {
+            console.error('predictSingle error:', error);
+            throw error;
+        }
+    }
+    
+    displaySingleResult(result) {
+        try {
+            const resultsDiv = document.getElementById('results');
+            if (!resultsDiv) return;
+
+            let singleDiv = document.getElementById('single-result');
+            if (!singleDiv) {
+                singleDiv = document.createElement('div');
+                singleDiv.id = 'single-result';
+                singleDiv.className = 'panel';
+                resultsDiv.prepend(singleDiv);
+            }
+
+            const probs = result.result.probabilities;
+            const conf = (result.result.confidence * 100).toFixed(1) + '%';
+            const classification = result.result.classification;
+            
+            // Color based on classification
+            const classColor = classification === 'CONFIRMED' ? '#00ff00' : '#ff0000';
+            const classIcon = classification === 'CONFIRMED' ? '✓' : '✗';
+
+            singleDiv.innerHTML = `
+                <h3>Object Analysis (${this.activeModel?.name || 'Model'})</h3>
+                <div class="metrics">
+                    <div class="metric">
+                        <div class="metric-value" style="color: ${classColor}">${classIcon} ${classification}</div>
+                        <div class="metric-label">Classification</div>
+                    </div>
+                    <div class="metric">
+                        <div class="metric-value">${conf}</div>
+                        <div class="metric-label">Confidence</div>
+                    </div>
+                </div>
+                <div style="margin-top:15px;">
+                    <strong>Probabilities:</strong>
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 8px;">
+                        <div>
+                            <span style="color: #ff0000;">False Positive:</span> 
+                            <strong>${(probs.falsePositive * 100).toFixed(1)}%</strong>
+                        </div>
+                        <div>
+                            <span style="color: #00ff00;">Confirmed:</span> 
+                            <strong>${(probs.confirmed * 100).toFixed(1)}%</strong>
+                        </div>
+                    </div>
+                </div>
+                <div style="margin-top:12px; padding-top: 12px; border-top: 1px solid rgba(255,255,255,0.1);">
+                    <small><strong>Input Features:</strong> ${result.features.map((v, i) => {
+                        const labels = ['Period', 'Duration', 'Depth', 'Stellar R', 'Stellar T', 'Impact'];
+                        return `${labels[i]}: ${v === null ? 'N/A' : v.toFixed(3)}`;
+                    }).join(' | ')}</small>
+                </div>
+            `;
+
+            this.showNotification(`Classified as ${classification} with ${conf} confidence`, 
+                classification === 'CONFIRMED' ? 'success' : 'info');
+        } catch (error) {
+            console.error('displaySingleResult error:', error);
+            this.showNotification('Failed to display prediction result', 'error');
+        }
+    }
+
+    async crossValidate(k = 5) {
+        try {
+            if (!this.trainingData || !this.trainingData.features || this.trainingData.features.length === 0) {
+                this.showNotification('No training data available for cross-validation', 'warning');
+                return;
+            }
+            if (!this.activeModel) {
+                this.showNotification('Select a model before running cross-validation', 'warning');
+                return;
+            }
+
+            this.updateStatus('Running cross-validation...', true);
+
+            const X = this.trainingData.features;
+            const y = this.trainingData.labels;
+            const n = X.length;
+            const foldSize = Math.max(1, Math.floor(n / k));
+
+            const metricsAcc = { accuracy: [], precision: [], recall: [], f1score: [] };
+
+            for (let fold = 0; fold < k; fold++) {
+                const start = fold * foldSize;
+                const end = Math.min(n, start + foldSize);
+
+                const X_val = X.slice(start, end);
+                const y_val = y.slice(start, end);
+
+                const X_train = X.slice(0, start).concat(X.slice(end));
+                const y_train = y.slice(0, start).concat(y.slice(end));
+
+                // Clone model
+                let clone;
+                try {
+                    const Ctor = this.activeModel.constructor;
+                    const cfg = JSON.parse(JSON.stringify(this.activeModel.config || {}));
+                    clone = new Ctor(cfg);
+                } catch (err) {
+                    console.warn('Failed to clone model; using the same instance (may overwrite).', err);
+                    clone = this.activeModel;
+                }
+
+                // Data already PCA-transformed
+                const XtrainTensor = tf.tensor2d(X_train);
+                const XvalTensor = tf.tensor2d(X_val);
+
+                // Fit clone
+                try {
+                    await clone.fit(XtrainTensor, y_train, 0.1);
+                    const foldMetrics = await clone.evaluate(XvalTensor, y_val);
+                    metricsAcc.accuracy.push(foldMetrics.accuracy || 0);
+                    metricsAcc.precision.push(foldMetrics.precision || 0);
+                    metricsAcc.recall.push(foldMetrics.recall || 0);
+                    metricsAcc.f1score.push(foldMetrics.f1score || foldMetrics.f1 || 0);
+                } catch (err) {
+                    console.warn('Cross-validation fold failed:', err);
+                } finally {
+                    if (XtrainTensor) XtrainTensor.dispose();
+                    if (XvalTensor) XvalTensor.dispose();
+                    if (clone && clone !== this.activeModel && typeof clone.dispose === 'function') {
+                        try { clone.dispose(); } catch (e) {}
+                    }
+                }
+            }
+
+            // Aggregate metrics
+            const avg = arr => arr.length ? (arr.reduce((a,b)=>a+b,0)/arr.length) : 0;
+            const summary = {
+                accuracy: avg(metricsAcc.accuracy),
+                precision: avg(metricsAcc.precision),
+                recall: avg(metricsAcc.recall),
+                f1score: avg(metricsAcc.f1score)
+            };
+
+            // Display results
+            this.displayCrossValResults(summary, k);
+            this.updateStatus('Cross-validation completed');
+            this.showNotification(`Cross-validation completed (${k} folds)`, 'success');
+
+        } catch (error) {
+            console.error('crossValidate error:', error);
+            this.updateStatus('Cross-validation failed');
+            this.showNotification('Cross-validation failed: ' + error.message, 'error');
+        }
+    }
+
+    displayCrossValResults(summary, k) {
+        try {
+            let cvDiv = document.getElementById('crossval-results');
+            if (!cvDiv) {
+                cvDiv = document.createElement('div');
+                cvDiv.id = 'crossval-results';
+                cvDiv.className = 'panel';
+                const container = document.querySelector('.container');
+                if (container) {
+                    container.insertBefore(cvDiv, container.firstChild);
+                }
+            }
+            cvDiv.innerHTML = `
+                <h3>Cross-validation (${k} folds) - Summary</h3>
+                <div class="metrics">
+                    <div class="metric"><div class="metric-value">${(summary.accuracy*100).toFixed(1)}%</div><div class="metric-label">Mean Accuracy</div></div>
+                    <div class="metric"><div class="metric-value">${(summary.precision*100).toFixed(1)}%</div><div class="metric-label">Mean Precision</div></div>
+                    <div class="metric"><div class="metric-value">${(summary.recall*100).toFixed(1)}%</div><div class="metric-label">Mean Recall</div></div>
+                    <div class="metric"><div class="metric-value">${(summary.f1score*100).toFixed(1)}%</div><div class="metric-label">Mean F1</div></div>
+                </div>
+            `;
+        } catch (error) {
+            console.error('displayCrossValResults error:', error);
+        }
+    }
+
     dispose() {
-        // Clean up all models
         this.models.forEach(model => model.dispose());
         this.models.clear();
         

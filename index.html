@@ -9,7 +9,7 @@
 <body>
     <div class="container">
         <div class="header">
-            <h1>🚀 ExoPlanet AI Detector:EDA</h1>
+            <h1>ExoPlanet ML Detector:EMD</h1>
             <p>Advanced Machine Learning with PCA for Exoplanet Discovery</p>
             <div class="mode-selector">
                 <button class="mode-btn active" data-mode="novice" onclick="switchMode('novice')">🎓 Novice Mode</button>
@@ -51,9 +51,9 @@
             </div>
             
             <div class="panel">
-                <h3>🧮 Principal Component Analysis</h3>
+                <h3>Principal Component Analysis</h3>
                 <div class="tutorial" id="pca-tutorial">
-                    <strong>💡 PCA Analysis:</strong> Principal components capture the most important variance in exoplanet data. The first few components explain most of the data's structure.
+                    <strong>PCA Analysis:</strong> Principal components capture the most important variance in exoplanet data. The first few components explain most of the data's structure.
                 </div>
                 
                 <div class="controls">
@@ -101,7 +101,7 @@
         </div>
         
         <div class="panel">
-            <h3>📁 Data Input</h3>
+            <h3>🔍 Data Input</h3>
             <div class="tutorial" id="tutorial">
                 <strong>💡 Getting Started:</strong> Upload NASA exoplanet CSV files or enter parameters manually. The system uses PCA-transformed features for improved classification accuracy.
             </div>
@@ -142,7 +142,7 @@
             <div class="btn-group">
                 <button class="btn" id="predict-single" onclick="predictSingle()">🔍 Analyze Object</button>
                 <button class="btn" id="batch-predict" onclick="batchPredict()">⚡ Batch Analysis</button>
-                <button class="btn advanced" id="cross-validate" onclick="crossValidate()">📊 Cross Validate</button>
+                <button class="btn advanced" id="cross-validate" onclick="crossValidate(5)">📊 Cross Validate</button>
             </div>
         </div>
         
@@ -163,13 +163,11 @@
         </div>
     </div>
 
-    <!-- Load dependencies first -->
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@latest/dist/tf.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/plotly.js-dist@2.26.0/plotly.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.8.5/d3.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
 
-    <!-- Load application modules -->
     <script type="module" src="js/index.js"></script>
 </body>
 </html>

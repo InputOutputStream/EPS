@@ -8,7 +8,7 @@ export class RandomForestModel extends BaseModel {
     constructor(config = {}) {
         const defaultConfig = {
             nEstimators: 100,
-            maxDepth: 10,
+            maxDepth: 5,
             minSamplesSplit: 2,
             minSamplesLeaf: 1,
             maxFeatures: 'sqrt', // 'sqrt', 'log2', number, or null
