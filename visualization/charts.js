@@ -28,11 +28,9 @@ export class Visualizer {
 
     async updatePCAPlot(features, labels) {
         try {
-            // Convert tensors to arrays if needed
             const featuresArray = features.arraySync ? await features.arraySync() : features;
             const labelsArray = labels.arraySync ? await labels.arraySync() : labels;
             
-            // Create traces for each class
             const traces = this.createClassTraces(featuresArray, labelsArray);
             
             const layout = {
@@ -46,7 +44,7 @@ export class Visualizer {
                 }
             };
             
-            await Plotly.newPlot('pca-biplot', traces, layout);
+            await Plotly.newPlot('pca-biplot', traces, layout, true);
             
         } catch (error) {
             console.error('Error updating PCA plot:', error);
@@ -60,7 +58,6 @@ export class Visualizer {
             2: { name: 'CONFIRMED', color: this.plotConfigs.colors['CONFIRMED'], points: [] }
         };
         
-        // Group data by class
         features.forEach((feature, index) => {
             const label = labels[index];
             if (classData[label]) {
@@ -68,7 +65,6 @@ export class Visualizer {
             }
         });
         
-        // Create traces
         const traces = [];
         Object.entries(classData).forEach(([classId, classInfo]) => {
             if (classInfo.points.length > 0) {
@@ -92,34 +88,55 @@ export class Visualizer {
         return traces;
     }
 
-    async updateFeatureImportance(model) {
+    async updateFeatureImportance(model, nComponents = null) {
         try {
             let importances = null;
-            let featureNames = ['PC1', 'PC2', 'PC3', 'PC4', 'PC5', 'PC6'];
+            let featureNames = [];
             
             if (model && typeof model.getFeatureImportances === 'function') {
                 importances = model.getFeatureImportances();
+                
+                const nFeatures = importances.length;
+                
+                if (nComponents && nFeatures === nComponents) {
+                    featureNames = Array.from({length: nFeatures}, (_, i) => `PC${i + 1}`);
+                } else {
+                    featureNames = Array.from({length: nFeatures}, (_, i) => `Feature ${i + 1}`);
+                }
             } else {
-                // Default importance values for PCA components
                 importances = [0.45, 0.25, 0.15, 0.08, 0.04, 0.03];
+                featureNames = ['PC1', 'PC2', 'PC3', 'PC4', 'PC5', 'PC6'];
+            }
+            
+            const maxDisplay = 15;
+            if (importances.length > maxDisplay) {
+                const indexed = importances.map((val, idx) => ({val, idx}));
+                indexed.sort((a, b) => b.val - a.val);
+                const topIndices = indexed.slice(0, maxDisplay).map(x => x.idx);
+                
+                importances = topIndices.map(idx => importances[idx]);
+                featureNames = topIndices.map(idx => featureNames[idx]);
             }
             
             const trace = {
-                x: importances.slice(0, 6),
-                y: featureNames.slice(0, 6),
+                x: importances,
+                y: featureNames,
                 type: 'bar',
                 orientation: 'h',
                 marker: { 
-                    color: this.plotConfigs.colors.primary,
-                    colorscale: 'Viridis'
+                    color: importances,
+                    colorscale: 'Viridis',
+                    showscale: true,
+                    colorbar: { title: 'Importance' }
                 }
             };
             
             const layout = {
                 ...this.plotConfigs.defaultLayout,
-                title: 'Feature Importance (PCA Components)',
+                title: `Feature Importance - ${model?.name || 'Model'}`,
                 xaxis: { title: 'Importance Score' },
-                yaxis: { title: 'Features' }
+                yaxis: { title: 'Features', automargin: true },
+                height: Math.max(400, featureNames.length * 25)
             };
             
             await Plotly.newPlot('feature-importance', [trace], layout);
@@ -129,22 +146,33 @@ export class Visualizer {
         }
     }
 
-    async updateModelComparison(models) {
+    async updateModelComparison(modelsMap) {
         try {
             const modelNames = [];
             const accuracies = [];
             const precisions = [];
             const recalls = [];
+            const f1Scores = [];
             
-            models.forEach((model, name) => {
-                if (model.trained) {
+            const modelsArray = modelsMap instanceof Map ? 
+                Array.from(modelsMap.entries()) : 
+                Object.entries(modelsMap);
+            
+            for (const [name, model] of modelsArray) {
+                if (model && model.trained) {
                     const metrics = model.getMetrics();
                     modelNames.push(name);
                     accuracies.push(metrics.accuracy || 0);
                     precisions.push(metrics.precision || 0);
                     recalls.push(metrics.recall || 0);
+                    f1Scores.push(metrics.f1 || 0);
                 }
-            });
+            }
+            
+            if (modelNames.length === 0) {
+                console.log('No trained models to compare');
+                return;
+            }
             
             const traces = [
                 {
@@ -167,18 +195,25 @@ export class Visualizer {
                     name: 'Recall',
                     type: 'bar',
                     marker: { color: '#00ff00' }
+                },
+                {
+                    x: modelNames,
+                    y: f1Scores,
+                    name: 'F1 Score',
+                    type: 'bar',
+                    marker: { color: '#ffaa00' }
                 }
             ];
             
             const layout = {
                 ...this.plotConfigs.defaultLayout,
                 title: 'Model Performance Comparison',
-                xaxis: { title: 'Models' },
+                xaxis: { title: 'Models', automargin: true },
                 yaxis: { title: 'Score', range: [0, 1] },
-                barmode: 'group'
+                barmode: 'group',
+                height: 400
             };
             
-            // Check if element exists
             const element = document.getElementById('model-comparison');
             if (element) {
                 await Plotly.newPlot('model-comparison', traces, layout);
@@ -200,7 +235,6 @@ export class Visualizer {
             y.push(tpr);
         }
         
-        // Add diagonal reference line
         const traces = [
             {
                 x: x,
@@ -272,15 +306,13 @@ export class Visualizer {
             const t = i * period / 200;
             let f = 1.0;
             
-            // Add transit
             const phase = (t % period) / period;
             if (Math.abs(phase - 0.5) < (duration/24) / (2 * period)) {
                 f -= depth / 1000000;
             }
             
-            // Add noise and stellar variability
             f += (Math.random() - 0.5) * 0.0001;
-            f += 0.00005 * Math.sin(2 * Math.PI * t / (period * 0.3)); // Stellar rotation
+            f += 0.00005 * Math.sin(2 * Math.PI * t / (period * 0.3));
             
             time.push(t);
             flux.push(f);
@@ -372,5 +404,4 @@ export class Visualizer {
     }
 }
 
-// Export singleton instance
 export const visualizer = new Visualizer();
