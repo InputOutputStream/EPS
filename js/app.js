@@ -103,22 +103,23 @@ export class ExoplanetDetectorApp {
         }));
     }
 
-async loadPCAParameters() {
-    try {
-        this.pcaParams = await ModelUtils.loadPCAParams();
-        if (this.pcaParams) {
-            console.log('PCA parameters loaded successfully');
-            this.pcaParams = ModelUtils.normalizePCAParams(this.pcaParams);
-            this.updatePCADisplay();
-        } else {
-            console.warn('PCA parameters not found, will generate mock parameters when data is loaded');
-            this.pcaParams = null; // La génération se fera dans processFile ou trainModels
+    async loadPCAParameters() {
+        try {
+            this.pcaParams = await ModelUtils.loadPCAParams();
+            console.log("The first This.pcaParams: ", this.pcaParams)
+            if (this.pcaParams) {
+                console.log('PCA parameters loaded successfully');
+                this.pcaParams = ModelUtils.normalizePCAParams(this.pcaParams);
+                this.updatePCADisplay();
+            } else {
+                console.warn('PCA parameters not found, will generate mock parameters when data is loaded');
+                this.pcaParams = null; // La génération se fera dans processFile ou trainModels
+            }
+        } catch (error) {
+            console.error('Error loading PCA parameters:', error);
+            this.pcaParams = null;
         }
-    } catch (error) {
-        console.error('Error loading PCA parameters:', error);
-        this.pcaParams = null;
     }
-}
 
    generateMockPCAParams(nFeatures, nComponents = 3) {
     // Générer des paramètres PCA fictifs basés sur le nombre de caractéristiques
@@ -525,7 +526,9 @@ async processRawCSV(file) {
         
         const varianceElement = document.getElementById('variance-explained');
         if (varianceElement) {
+            console.log("This.pcaParams: ", this.pcaParams)
             const ratios = this.pcaParams.explained_variance_ratio;
+            
             const cumulative = ratios.reduce((acc, val, idx) => {
                 acc.push(idx === 0 ? val : acc[idx-1] + val);
                 return acc;
@@ -616,9 +619,9 @@ async processRawCSV(file) {
 
     async handleBatchPrediction() {
         if (!this.trainingData || this.trainingData.features.length === 0) {
-            const mockFeatures = this.dataProcessor.generateMockDataset(100);
-            const results = await this.batchPredict(mockFeatures);
-            this.displayBatchResults(results);
+            console.error('Please Upload The Dataset First:', error);
+            this.showError('Please Upload The Dataset First: ' + error.message);
+       
         } else {
             const results = await this.batchPredict(this.trainingData.features.slice(0, 50));
             this.displayBatchResults(results);

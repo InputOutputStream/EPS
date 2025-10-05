@@ -99,7 +99,7 @@ export class EnsembleModel extends BaseModel {
             const { MLPModel } = await import('./mlp.js');
             this.metaLearner = new MLPModel({
                 ...this.config.metaLearnerConfig,
-                numClasses: 3 // Assuming 3-class classification
+                numClasses: 3 // 3-class classification
             });
         }
 
